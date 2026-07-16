@@ -1,14 +1,13 @@
 """
 Page 1 - 책 추천받기 (Path A / Path B)
+Streamlit Cloud 최적화: SentenceBERT 지연 로딩
 """
 import streamlit as st
 import pandas as pd
 import numpy as np
 import json
 import faiss
-import torch
 from pathlib import Path
-from sentence_transformers import SentenceTransformer
 
 # 페이지 설정
 st.set_page_config(
@@ -21,7 +20,7 @@ st.set_page_config(
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
 # =========================
-# 자원 로드
+# 가벼운 자원만 즉시 로드
 # =========================
 @st.cache_data
 def load_config():
@@ -41,24 +40,79 @@ def load_tags():
 def load_faiss():
     return faiss.read_index("models/faiss_index.bin")
 
+# 가벼운 것들만 즉시 로드
+config = load_config()
+df_books = load_books()
+tag_templates = load_tags()
+faiss_index = load_faiss()
+
+# =========================
+# SentenceBERT는 별도 함수로 (지연 로딩)
+# =========================
 @st.cache_resource
-def load_model():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+def load_sbert_model():
+    """SentenceBERT 지연 로딩 - 실제 검색 시점에 호출"""
+    import torch
+    from sentence_transformers import SentenceTransformer
+    device = "cpu"  # Streamlit Cloud 무료 티어는 GPU 없음
     return SentenceTransformer("jhgan/ko-sroberta-multitask", device=device)
 
-# 로딩 상태 표시
-with st.spinner("🚀 추천 시스템 준비 중... (SentenceBERT 로딩)"):
-    config = load_config()
-    df_books = load_books()
-    tag_templates = load_tags()
-    faiss_index = load_faiss()
-    sbert_model = load_model()
+# =========================
+# 검색 로직 함수
+# =========================
+def run_recommendation(query_text_or_texts, alpha, is_tag=False):
+    """추천 실행"""
+    sbert_model = load_sbert_model()  # 이 시점에 로드
+
+    if is_tag:
+        # 태그 → 텍스트 결합
+        query_embed = sbert_model.encode(
+            [query_text_or_texts],
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        ).astype(np.float32)
+        user_vector = query_embed
+    else:
+        # 여러 책 → 평균 벡터
+        query_embeds = sbert_model.encode(
+            query_text_or_texts,
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        )
+        user_vector = query_embeds.mean(axis=0, keepdims=True).astype(np.float32)
+        user_vector /= np.linalg.norm(user_vector)
+
+    # FAISS 검색
+    top_k = 20
+    similarities, indices = faiss_index.search(user_vector, top_k)
+
+    # 결과 조립
+    results = df_books.iloc[indices[0]].copy()
+    results["content_similarity"] = similarities[0]
+
+    # 정규화 + 하이브리드
+    sim_min = results["content_similarity"].min()
+    sim_max = results["content_similarity"].max()
+    if sim_max > sim_min:
+        results["content_normalized"] = (results["content_similarity"] - sim_min) / (sim_max - sim_min)
+    else:
+        results["content_normalized"] = 1.0
+
+    results["hybrid_score"] = alpha * results["content_normalized"] + (1 - alpha) * results["popularity_score"]
+    results = results.sort_values("hybrid_score", ascending=False).head(10).reset_index(drop=True)
+
+    return results
 
 # =========================
 # 헤더
 # =========================
 st.title("📖 책 추천받기")
 st.caption("좋아하는 책 3권을 알려주시거나, 취향 태그를 선택하시면 유사한 한국 도서를 추천해드립니다.")
+
+# 첫 사용 안내
+if "first_visit" not in st.session_state:
+    st.info("💡 **첫 검색 시 AI 모델 로딩으로 1~3분 소요됩니다.** 이후 검색은 즉시 실행됩니다.")
+    st.session_state.first_visit = True
 
 st.divider()
 
@@ -102,7 +156,7 @@ if st.session_state.path_selected is None:
             - 최근 감명 깊게 읽은 책이 있다
             - 특정 저자·주제에 관심이 있다
             """)
-            if st.button("✍️ Path A로 시작", use_container_width=True, type="primary"):
+            if st.button("✍️ Path A로 시작", use_container_width=True, type="primary", key="path_a_btn"):
                 st.session_state.path_selected = "A"
                 st.rerun()
 
@@ -118,7 +172,7 @@ if st.session_state.path_selected is None:
             - 취향이 애매하거나 새로운 발견을 원함
             - 여러 장르를 탐색하고 싶다
             """)
-            if st.button("🎨 Path B로 시작", use_container_width=True):
+            if st.button("🎨 Path B로 시작", use_container_width=True, key="path_b_btn"):
                 st.session_state.path_selected = "B"
                 st.rerun()
 
@@ -195,39 +249,17 @@ if st.session_state.path_selected == "A":
     queries = [b for b in [book_1, book_2, book_3] if b.strip()]
 
     if st.button("🔍 추천받기", type="primary", disabled=len(queries) == 0, use_container_width=True):
-        with st.spinner("🤖 유사한 도서를 찾고 있어요..."):
-            # 임베딩
-            query_embeds = sbert_model.encode(
-                queries,
-                convert_to_numpy=True,
-                normalize_embeddings=True
-            )
-            user_vector = query_embeds.mean(axis=0, keepdims=True).astype(np.float32)
-            user_vector /= np.linalg.norm(user_vector)
-
-            # FAISS 검색
-            top_k = 20
-            similarities, indices = faiss_index.search(user_vector, top_k)
-
-            # 결과 조립
-            results = df_books.iloc[indices[0]].copy()
-            results["content_similarity"] = similarities[0]
-
-            # 정규화 + 하이브리드
-            sim_min = results["content_similarity"].min()
-            sim_max = results["content_similarity"].max()
-            if sim_max > sim_min:
-                results["content_normalized"] = (results["content_similarity"] - sim_min) / (sim_max - sim_min)
-            else:
-                results["content_normalized"] = 1.0
-
-            results["hybrid_score"] = alpha * results["content_normalized"] + (1 - alpha) * results["popularity_score"]
-            results = results.sort_values("hybrid_score", ascending=False).head(10).reset_index(drop=True)
-
-            st.session_state.results = results
-            st.session_state.used_alpha = alpha
-            st.session_state.input_summary = ", ".join(queries)
-            st.session_state.path_used = "A"
+        # 첫 실행 시 오래 걸릴 수 있음을 명시
+        with st.spinner("🤖 AI 모델 로딩 & 유사 도서 검색 중... (첫 실행 시 1~3분)"):
+            try:
+                results = run_recommendation(queries, alpha, is_tag=False)
+                st.session_state.results = results
+                st.session_state.used_alpha = alpha
+                st.session_state.input_summary = ", ".join(queries)
+                st.session_state.path_used = "A"
+                st.success("✅ 추천 완료!")
+            except Exception as e:
+                st.error(f"❌ 검색 중 오류: {str(e)}")
 
 # =========================
 # Path B: 태그 선택
@@ -250,41 +282,20 @@ else:
         st.info(f"🏷️ 선택된 태그: {', '.join(selected_tags)}")
 
     if st.button("🔍 추천받기", type="primary", disabled=len(selected_tags) == 0, use_container_width=True):
-        with st.spinner("🤖 태그에 어울리는 도서를 찾고 있어요..."):
-            # 태그 → 텍스트 변환
-            tag_texts = [tag_templates.get(t, t) for t in selected_tags]
-            combined = " . ".join(tag_texts)
+        with st.spinner("🤖 AI 모델 로딩 & 태그 매칭 중... (첫 실행 시 1~3분)"):
+            try:
+                # 태그 → 텍스트 결합
+                tag_texts = [tag_templates.get(t, t) for t in selected_tags]
+                combined = " . ".join(tag_texts)
 
-            # 임베딩
-            query_embed = sbert_model.encode(
-                [combined],
-                convert_to_numpy=True,
-                normalize_embeddings=True
-            ).astype(np.float32)
-
-            # FAISS 검색
-            top_k = 20
-            similarities, indices = faiss_index.search(query_embed, top_k)
-
-            # 결과 조립
-            results = df_books.iloc[indices[0]].copy()
-            results["content_similarity"] = similarities[0]
-
-            # 정규화 + 하이브리드
-            sim_min = results["content_similarity"].min()
-            sim_max = results["content_similarity"].max()
-            if sim_max > sim_min:
-                results["content_normalized"] = (results["content_similarity"] - sim_min) / (sim_max - sim_min)
-            else:
-                results["content_normalized"] = 1.0
-
-            results["hybrid_score"] = alpha * results["content_normalized"] + (1 - alpha) * results["popularity_score"]
-            results = results.sort_values("hybrid_score", ascending=False).head(10).reset_index(drop=True)
-
-            st.session_state.results = results
-            st.session_state.used_alpha = alpha
-            st.session_state.input_summary = ", ".join(selected_tags)
-            st.session_state.path_used = "B"
+                results = run_recommendation(combined, alpha, is_tag=True)
+                st.session_state.results = results
+                st.session_state.used_alpha = alpha
+                st.session_state.input_summary = ", ".join(selected_tags)
+                st.session_state.path_used = "B"
+                st.success("✅ 추천 완료!")
+            except Exception as e:
+                st.error(f"❌ 검색 중 오류: {str(e)}")
 
 # =========================
 # 결과 표시
@@ -336,9 +347,9 @@ if st.session_state.results is not None:
 
                         # 점수 상세
                         c1, c2, c3 = st.columns(3)
-                        c1.metric("유사도", f"{book['content_similarity']:.3f}", label_visibility="visible")
-                        c2.metric("인기도", f"{book['popularity_score']:.3f}", label_visibility="visible")
-                        c3.metric("최종 점수", f"{book['hybrid_score']:.3f}", label_visibility="visible")
+                        c1.metric("유사도", f"{book['content_similarity']:.3f}")
+                        c2.metric("인기도", f"{book['popularity_score']:.3f}")
+                        c3.metric("최종 점수", f"{book['hybrid_score']:.3f}")
 
                         # 알라딘 링크
                         if pd.notna(book.get("link", None)) and book["link"]:
