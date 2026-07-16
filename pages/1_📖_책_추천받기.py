@@ -499,7 +499,7 @@ if view_mode == "📇 카드 뷰":
                 with col:
                     st.markdown(card_html, unsafe_allow_html=True)
 
-else:
+        else:
         # 테이블 뷰
         display_df = results[["title", "author_clean", "cat_main", "cat_mid",
                              "content_similarity", "popularity_score", "hybrid_score"]].copy()
