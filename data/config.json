@@ -1,19 +1,10 @@
 {
+  "total_books": 6974,
   "embedding_model": "jhgan/ko-sroberta-multitask",
-  "embedding_dim": 768,
   "default_alpha": 0.7,
   "default_top_k": 10,
-  "faiss_index_path": "models/faiss_index.bin",
-  "books_data_path": "streamlit_assets/books_streamlit.parquet",
-  "tag_templates_path": "streamlit_assets/tag_templates.json",
-<<<<<<< HEAD
-  "total_books": 6974,
-=======
-  "total_books": 6911,
->>>>>>> fa8c2cc (Restore project files)
   "project_meta": {
     "name": "한국 도서 하이브리드 추천 시스템",
-    "author": "본인",
     "phase": "Portfolio v1.0"
   }
 }
