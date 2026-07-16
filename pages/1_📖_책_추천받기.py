@@ -320,43 +320,186 @@ if st.session_state.results is not None:
         horizontal=True
     )
 
-    if view_mode == "📇 카드 뷰":
-        # 카드 뷰 (2열 그리드)
+if view_mode == "📇 카드 뷰":
+        # 커스텀 CSS
+        st.markdown("""
+        <style>
+        .book-card {
+            background: linear-gradient(145deg, #1E1E2E, #2A2A3E);
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 16px;
+            border: 1px solid rgba(255,255,255,0.08);
+            transition: all 0.3s ease;
+        }
+        .book-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            border: 1px solid rgba(46, 134, 171, 0.4);
+        }
+        .book-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 8px;
+            line-height: 1.4;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .book-meta {
+            color: #A0A0B0;
+            font-size: 13px;
+            margin-bottom: 4px;
+        }
+        .book-rank {
+            display: inline-block;
+            background: linear-gradient(135deg, #2E86AB, #4A9FD1);
+            color: white;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        .score-bar-container {
+            margin-top: 12px;
+        }
+        .score-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #888;
+            margin-bottom: 3px;
+        }
+        .score-bar {
+            height: 6px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .score-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+        .fill-similarity {
+            background: linear-gradient(90deg, #2E86AB, #4A9FD1);
+        }
+        .fill-popularity {
+            background: linear-gradient(90deg, #F39C12, #F5B041);
+        }
+        .fill-hybrid {
+            background: linear-gradient(90deg, #27AE60, #2ECC71);
+        }
+        .aladin-link {
+            display: inline-block;
+            margin-top: 10px;
+            padding: 6px 14px;
+            background: rgba(46, 134, 171, 0.15);
+            color: #4A9FD1;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .aladin-link:hover {
+            background: rgba(46, 134, 171, 0.3);
+            color: #6BB6E0;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+        # 카드 렌더링 (2열 그리드)
         for i in range(0, len(results), 2):
-            cols = st.columns(2)
+            cols = st.columns(2, gap="medium")
             for j, col in enumerate(cols):
                 idx = i + j
                 if idx >= len(results):
                     break
                 book = results.iloc[idx]
 
+                # 값 준비
+                cover_url = book.get("cover_url", "")
+                if pd.isna(cover_url) or not cover_url:
+                    cover_url = ""
+                
+                title = book["title"]
+                author = book["author_clean"]
+                cat_main = book["cat_main"]
+                cat_mid = book["cat_mid"]
+                sim = book["content_similarity"]
+                pop = book["popularity_score"]
+                hyb = book["hybrid_score"]
+                link = book.get("link", "")
+                if pd.isna(link):
+                    link = ""
+
+                # 점수 백분율 (0~100)
+                sim_pct = min(100, max(0, sim * 100))
+                pop_pct = pop * 100
+                hyb_pct = hyb * 100
+
+                # 링크 HTML
+                link_html = f'<a href="{link}" target="_blank" class="aladin-link">📚 알라딘에서 보기 →</a>' if link else ""
+                
+                # 이미지 HTML
+                if cover_url:
+                    img_html = f'<img src="{cover_url}" style="width:100px; height:140px; object-fit:cover; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.3);"/>'
+                else:
+                    img_html = '<div style="width:100px; height:140px; background:#2a2a3e; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:32px;">📕</div>'
+
+                # 카드 HTML
+                card_html = f"""
+                <div class="book-card">
+                    <div style="display:flex; gap:16px;">
+                        <div style="flex-shrink:0;">
+                            {img_html}
+                        </div>
+                        <div style="flex-grow:1; min-width:0;">
+                            <div class="book-rank">#{idx+1} 추천</div>
+                            <div class="book-title">{title}</div>
+                            <div class="book-meta">✍️ {author}</div>
+                            <div class="book-meta">🏷️ {cat_main} · {cat_mid}</div>
+                            {link_html}
+                        </div>
+                    </div>
+                    <div class="score-bar-container">
+                        <div class="score-label">
+                            <span>🎯 콘텐츠 유사도</span>
+                            <span style="color:#4A9FD1; font-weight:600;">{sim:.3f}</span>
+                        </div>
+                        <div class="score-bar">
+                            <div class="score-fill fill-similarity" style="width:{sim_pct}%;"></div>
+                        </div>
+                    </div>
+                    <div class="score-bar-container">
+                        <div class="score-label">
+                            <span>🔥 인기도</span>
+                            <span style="color:#F5B041; font-weight:600;">{pop:.3f}</span>
+                        </div>
+                        <div class="score-bar">
+                            <div class="score-fill fill-popularity" style="width:{pop_pct}%;"></div>
+                        </div>
+                    </div>
+                    <div class="score-bar-container">
+                        <div class="score-label">
+                            <span>⭐ 최종 점수</span>
+                            <span style="color:#2ECC71; font-weight:700; font-size:14px;">{hyb:.3f}</span>
+                        </div>
+                        <div class="score-bar">
+                            <div class="score-fill fill-hybrid" style="width:{hyb_pct}%;"></div>
+                        </div>
+                    </div>
+                </div>
+                """
+                
                 with col:
-                    with st.container(border=True):
-                        # 표지 이미지 + 정보
-                        img_col, info_col = st.columns([1, 3])
+                    st.markdown(card_html, unsafe_allow_html=True)
 
-                        with img_col:
-                            if pd.notna(book.get("cover_url", None)) and book["cover_url"]:
-                                st.image(book["cover_url"], use_container_width=True)
-                            else:
-                                st.markdown("📕")
-
-                        with info_col:
-                            st.markdown(f"**#{idx+1} · {book['title']}**")
-                            st.caption(f"저자: {book['author_clean']}")
-                            st.caption(f"카테고리: {book['cat_main']} > {book['cat_mid']}")
-
-                        # 점수 상세
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric("유사도", f"{book['content_similarity']:.3f}")
-                        c2.metric("인기도", f"{book['popularity_score']:.3f}")
-                        c3.metric("최종 점수", f"{book['hybrid_score']:.3f}")
-
-                        # 알라딘 링크
-                        if pd.notna(book.get("link", None)) and book["link"]:
-                            st.markdown(f"[📚 알라딘에서 자세히 보기]({book['link']})")
-
-    else:
+else:
         # 테이블 뷰
         display_df = results[["title", "author_clean", "cat_main", "cat_mid",
                              "content_similarity", "popularity_score", "hybrid_score"]].copy()
