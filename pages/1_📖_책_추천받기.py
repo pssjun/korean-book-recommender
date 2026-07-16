@@ -51,11 +51,12 @@ faiss_index = load_faiss()
 # =========================
 @st.cache_resource
 def load_sbert_model():
-    """SentenceBERT 지연 로딩 - 실제 검색 시점에 호출"""
-    import torch
+    """경량 다국어 SentenceBERT 로딩 (Streamlit Cloud 최적화)"""
     from sentence_transformers import SentenceTransformer
-    device = "cpu"  # Streamlit Cloud 무료 티어는 GPU 없음
-    return SentenceTransformer("jhgan/ko-sroberta-multitask", device=device)
+    return SentenceTransformer(
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        device="cpu"
+    )
 
 # =========================
 # 검색 로직 함수
