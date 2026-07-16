@@ -1,6 +1,6 @@
 """
 Page 1 - 책 추천받기 (Path A / Path B)
-Streamlit Cloud 최적화: SentenceBERT 지연 로딩
+Streamlit Cloud 최적화 + 세련된 카드 UI
 """
 import streamlit as st
 import pandas as pd
@@ -40,18 +40,16 @@ def load_tags():
 def load_faiss():
     return faiss.read_index("models/faiss_index.bin")
 
-# 가벼운 것들만 즉시 로드
 config = load_config()
 df_books = load_books()
 tag_templates = load_tags()
 faiss_index = load_faiss()
 
 # =========================
-# SentenceBERT는 별도 함수로 (지연 로딩)
+# SentenceBERT 지연 로딩
 # =========================
 @st.cache_resource
 def load_sbert_model():
-    """경량 다국어 SentenceBERT 로딩 (Streamlit Cloud 최적화)"""
     from sentence_transformers import SentenceTransformer
     return SentenceTransformer(
         "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
@@ -62,11 +60,9 @@ def load_sbert_model():
 # 검색 로직 함수
 # =========================
 def run_recommendation(query_text_or_texts, alpha, is_tag=False):
-    """추천 실행"""
-    sbert_model = load_sbert_model()  # 이 시점에 로드
+    sbert_model = load_sbert_model()
 
     if is_tag:
-        # 태그 → 텍스트 결합
         query_embed = sbert_model.encode(
             [query_text_or_texts],
             convert_to_numpy=True,
@@ -74,7 +70,6 @@ def run_recommendation(query_text_or_texts, alpha, is_tag=False):
         ).astype(np.float32)
         user_vector = query_embed
     else:
-        # 여러 책 → 평균 벡터
         query_embeds = sbert_model.encode(
             query_text_or_texts,
             convert_to_numpy=True,
@@ -83,15 +78,12 @@ def run_recommendation(query_text_or_texts, alpha, is_tag=False):
         user_vector = query_embeds.mean(axis=0, keepdims=True).astype(np.float32)
         user_vector /= np.linalg.norm(user_vector)
 
-    # FAISS 검색
     top_k = 20
     similarities, indices = faiss_index.search(user_vector, top_k)
 
-    # 결과 조립
     results = df_books.iloc[indices[0]].copy()
     results["content_similarity"] = similarities[0]
 
-    # 정규화 + 하이브리드
     sim_min = results["content_similarity"].min()
     sim_max = results["content_similarity"].max()
     if sim_max > sim_min:
@@ -110,15 +102,14 @@ def run_recommendation(query_text_or_texts, alpha, is_tag=False):
 st.title("📖 책 추천받기")
 st.caption("좋아하는 책 3권을 알려주시거나, 취향 태그를 선택하시면 유사한 한국 도서를 추천해드립니다.")
 
-# 첫 사용 안내
 if "first_visit" not in st.session_state:
-    st.info("💡 **첫 검색 시 AI 모델 로딩으로 1~3분 소요됩니다.** 이후 검색은 즉시 실행됩니다.")
+    st.info("💡 **첫 검색 시 AI 모델 로딩으로 30초~1분 소요됩니다.** 이후 검색은 즉시 실행됩니다.")
     st.session_state.first_visit = True
 
 st.divider()
 
 # =========================
-# 태그 카테고리 그룹핑
+# 태그 카테고리
 # =========================
 TAG_CATEGORIES = {
     "📚 장르 (Genre)": ["소설", "에세이", "자기계발", "시", "인문", "과학"],
@@ -137,7 +128,7 @@ if "used_alpha" not in st.session_state:
     st.session_state.used_alpha = 0.7
 
 # =========================
-# 진입 화면 (경로 선택 안 됐을 때)
+# 진입 화면
 # =========================
 if st.session_state.path_selected is None:
     st.markdown("### 어떻게 추천받으시겠어요?")
@@ -177,11 +168,10 @@ if st.session_state.path_selected is None:
                 st.session_state.path_selected = "B"
                 st.rerun()
 
-    # 시스템 설명
     st.divider()
     with st.expander("💡 이 추천 시스템은 어떻게 작동하나요?"):
         st.markdown("""
-        - **SentenceBERT**: 한국어 특화 언어 모델로 도서를 벡터로 변환
+        - **SentenceBERT**: 다국어 언어 모델로 도서를 벡터로 변환
         - **FAISS**: 6,974권의 한국 도서 임베딩에서 유사도 상위 K개를 밀리초 단위로 검색
         - **하이브리드**: 콘텐츠 유사도 + 인기 신호를 α 파라미터로 결합
         - **최종 점수 = α × 콘텐츠 유사도 + (1-α) × 인기 점수**
@@ -205,7 +195,7 @@ with c2:
         st.rerun()
 
 # =========================
-# α 슬라이더 (공통)
+# α 슬라이더
 # =========================
 alpha = st.slider(
     "🎚️ 개인화 강도 (α)",
@@ -216,7 +206,6 @@ alpha = st.slider(
     help="1.0 = 순수 콘텐츠 유사도 / 0.0 = 순수 인기순 / 0.7 = 균형(권장)"
 )
 
-# α 값 설명
 alpha_desc = ""
 if alpha >= 0.8:
     alpha_desc = "🎯 **개인화 강조**: 취향과 유사한 도서 우선"
@@ -235,7 +224,6 @@ st.divider()
 if st.session_state.path_selected == "A":
     st.markdown("**좋아하는 책 3권을 입력해주세요.**  \n(제목만이든, 제목+간단한 설명이든 자유롭게)")
 
-    # 예시 제공
     with st.expander("💡 입력 예시 보기"):
         st.code("""
 달러구트 꿈 백화점 - 잠들어야 입장 가능한 신비로운 꿈 백화점
@@ -250,8 +238,7 @@ if st.session_state.path_selected == "A":
     queries = [b for b in [book_1, book_2, book_3] if b.strip()]
 
     if st.button("🔍 추천받기", type="primary", disabled=len(queries) == 0, use_container_width=True):
-        # 첫 실행 시 오래 걸릴 수 있음을 명시
-        with st.spinner("🤖 AI 모델 로딩 & 유사 도서 검색 중... (첫 실행 시 1~3분)"):
+        with st.spinner("🤖 AI 모델 로딩 & 유사 도서 검색 중..."):
             try:
                 results = run_recommendation(queries, alpha, is_tag=False)
                 st.session_state.results = results
@@ -283,9 +270,8 @@ else:
         st.info(f"🏷️ 선택된 태그: {', '.join(selected_tags)}")
 
     if st.button("🔍 추천받기", type="primary", disabled=len(selected_tags) == 0, use_container_width=True):
-        with st.spinner("🤖 AI 모델 로딩 & 태그 매칭 중... (첫 실행 시 1~3분)"):
+        with st.spinner("🤖 AI 모델 로딩 & 태그 매칭 중..."):
             try:
-                # 태그 → 텍스트 결합
                 tag_texts = [tag_templates.get(t, t) for t in selected_tags]
                 combined = " . ".join(tag_texts)
 
@@ -309,18 +295,16 @@ if st.session_state.results is not None:
 
     st.divider()
 
-    # 결과 헤더
     st.markdown(f"### 🎁 추천 결과 Top 10")
     st.caption(f"경로: **Path {path_used}** | α: **{used_alpha}** | 입력: _{input_summary}_")
 
-    # 뷰 모드 토글
     view_mode = st.radio(
         "표시 방식",
         ["📇 카드 뷰", "📋 테이블 뷰"],
         horizontal=True
     )
 
-if view_mode == "📇 카드 뷰":
+    if view_mode == "📇 카드 뷰":
         # 커스텀 CSS
         st.markdown("""
         <style>
@@ -412,7 +396,6 @@ if view_mode == "📇 카드 뷰":
         </style>
         """, unsafe_allow_html=True)
 
-        # 카드 렌더링 (2열 그리드)
         for i in range(0, len(results), 2):
             cols = st.columns(2, gap="medium")
             for j, col in enumerate(cols):
@@ -421,11 +404,10 @@ if view_mode == "📇 카드 뷰":
                     break
                 book = results.iloc[idx]
 
-                # 값 준비
                 cover_url = book.get("cover_url", "")
                 if pd.isna(cover_url) or not cover_url:
                     cover_url = ""
-                
+
                 title = book["title"]
                 author = book["author_clean"]
                 cat_main = book["cat_main"]
@@ -437,21 +419,17 @@ if view_mode == "📇 카드 뷰":
                 if pd.isna(link):
                     link = ""
 
-                # 점수 백분율 (0~100)
                 sim_pct = min(100, max(0, sim * 100))
                 pop_pct = pop * 100
                 hyb_pct = hyb * 100
 
-                # 링크 HTML
                 link_html = f'<a href="{link}" target="_blank" class="aladin-link">📚 알라딘에서 보기 →</a>' if link else ""
-                
-                # 이미지 HTML
+
                 if cover_url:
                     img_html = f'<img src="{cover_url}" style="width:100px; height:140px; object-fit:cover; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.3);"/>'
                 else:
                     img_html = '<div style="width:100px; height:140px; background:#2a2a3e; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:32px;">📕</div>'
 
-                # 카드 HTML
                 card_html = f"""
                 <div class="book-card">
                     <div style="display:flex; gap:16px;">
@@ -495,12 +473,11 @@ if view_mode == "📇 카드 뷰":
                     </div>
                 </div>
                 """
-                
+
                 with col:
                     st.markdown(card_html, unsafe_allow_html=True)
 
-        else:
-        # 테이블 뷰
+    else:
         display_df = results[["title", "author_clean", "cat_main", "cat_mid",
                              "content_similarity", "popularity_score", "hybrid_score"]].copy()
         display_df.columns = ["제목", "저자", "대분류", "중분류", "콘텐츠 유사도", "인기 점수", "하이브리드 점수"]
@@ -525,11 +502,10 @@ if view_mode == "📇 카드 뷰":
 
     st.divider()
 
-    # 추천 시스템 인사이트
     with st.expander("🔍 이 추천은 어떻게 만들어졌나요?"):
         st.markdown(f"""
         **입력 정보 처리:**
-        - 입력하신 내용을 한국어 SentenceBERT(`jhgan/ko-sroberta-multitask`)로 벡터화
+        - 입력하신 내용을 다국어 SentenceBERT로 벡터화
         - Path A: 3권의 벡터를 평균 내어 취향 벡터 생성
         - Path B: 태그를 자연어로 변환 후 벡터화
 
@@ -547,7 +523,6 @@ if view_mode == "📇 카드 뷰":
         - α < 0.5: 인기 우선 (많은 사람이 좋아하는 도서 상위)
         """)
 
-    # 다시 시도 버튼
     if st.button("🔄 다른 조건으로 다시 추천받기", use_container_width=True):
         st.session_state.results = None
         st.rerun()
