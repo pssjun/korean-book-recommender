@@ -1,0 +1,8 @@
+streamlit==1.59.2
+pandas
+numpy
+pyarrow
+faiss-cpu
+sentence-transformers
+torch
+scikit-learn
