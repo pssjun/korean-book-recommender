@@ -156,7 +156,7 @@ streamlit run streamlit_app.py
 
 문제 정의부터 가설 검증, 실험 결과까지 전체 연구 과정을 정리했습니다.
 
-BOOK_OVERVIEW_KOR.md — 개요 · 문제정의 · 가설설정 · 실험및검증 · 결론
+- [BOOK_OVERVIEW_KOR.md](./BOOK_OVERVIEW_KOR.md) — 개요 · 문제정의 · 가설설정 · 실험및검증 · 결론
 
 ## ⚠️ 참고 사항
 
