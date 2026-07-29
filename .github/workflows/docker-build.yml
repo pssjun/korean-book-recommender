@@ -1,0 +1,142 @@
+name: Docker Build & API Test
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:   # 수동 실행 버튼
+
+jobs:
+  build-and-test:
+    name: Build image and verify API
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 레이어 캐시로 2회차부터 빌드 시간 대폭 단축
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: book-recommender-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start container
+        run: |
+          docker run -d --name api-test -p 8000:8000 book-recommender-api:ci
+          echo "Container started, waiting for model to load..."
+
+      # 모델 로딩에 시간이 걸리므로 준비될 때까지 폴링
+      - name: Wait for API readiness
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "API is ready (attempt $i)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::API failed to become ready within 5 minutes"
+          docker logs api-test
+          exit 1
+
+      - name: Verify health endpoint
+        run: |
+          RESPONSE=$(curl -s http://localhost:8000/health)
+          echo "Health response: $RESPONSE"
+
+          STATUS=$(echo "$RESPONSE" | jq -r '.status')
+          MODEL_LOADED=$(echo "$RESPONSE" | jq -r '.model_loaded')
+
+          if [ "$STATUS" != "ok" ] || [ "$MODEL_LOADED" != "true" ]; then
+            echo "::error::Health check failed"
+            docker logs api-test
+            exit 1
+          fi
+          echo "Health check passed"
+
+      # 아까 발견했던 데이터-인덱스 불일치를 CI에서 사전 차단
+      - name: Verify data/index consistency
+        run: |
+          RESPONSE=$(curl -s http://localhost:8000/health)
+          INDEX_SIZE=$(echo "$RESPONSE" | jq -r '.index_size')
+          TOTAL_BOOKS=$(echo "$RESPONSE" | jq -r '.total_books')
+
+          echo "index_size=$INDEX_SIZE, total_books=$TOTAL_BOOKS"
+
+          if [ "$INDEX_SIZE" != "$TOTAL_BOOKS" ]; then
+            echo "::error::Data/Index mismatch: index=$INDEX_SIZE, books=$TOTAL_BOOKS"
+            echo "Run 'python scripts/build_index.py' to rebuild the index."
+            exit 1
+          fi
+          echo "Consistency verified: $TOTAL_BOOKS books, $INDEX_SIZE vectors"
+
+      - name: Test recommendation endpoint (Path A)
+        run: |
+          RESPONSE=$(curl -s -X POST http://localhost:8000/recommend/path-a \
+            -H "Content-Type: application/json" \
+            -d '{"books":["달러구트 꿈 백화점","미드나잇 라이브러리"],"top_k":5,"alpha":0.7}')
+
+          RESULT_COUNT=$(echo "$RESPONSE" | jq -r '.results | length')
+          ELAPSED=$(echo "$RESPONSE" | jq -r '.elapsed_ms')
+
+          echo "Returned $RESULT_COUNT results in ${ELAPSED}ms"
+          echo "$RESPONSE" | jq -r '.results[] | "  - \(.rank). \(.title)"'
+
+          if [ "$RESULT_COUNT" != "5" ]; then
+            echo "::error::Expected 5 results, got $RESULT_COUNT"
+            docker logs api-test
+            exit 1
+          fi
+
+      - name: Test recommendation endpoint (Path B)
+        run: |
+          RESPONSE=$(curl -s -X POST http://localhost:8000/recommend/path-b \
+            -H "Content-Type: application/json" \
+            -d '{"tags":["소설","힐링"],"top_k":3,"alpha":0.7}')
+
+          RESULT_COUNT=$(echo "$RESPONSE" | jq -r '.results | length')
+          echo "Path B returned $RESULT_COUNT results"
+
+          if [ "$RESULT_COUNT" != "3" ]; then
+            echo "::error::Expected 3 results, got $RESULT_COUNT"
+            docker logs api-test
+            exit 1
+          fi
+
+      # 잘못된 입력이 422로 거부되는지 확인 (Pydantic 검증 동작 확인)
+      - name: Test input validation
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST http://localhost:8000/recommend/path-a \
+            -H "Content-Type: application/json" \
+            -d '{"books":["테스트"],"top_k":5,"alpha":1.5}')
+
+          echo "Invalid alpha=1.5 returned HTTP $HTTP_CODE"
+
+          if [ "$HTTP_CODE" != "422" ]; then
+            echo "::error::Expected 422 for invalid input, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "Input validation working correctly"
+
+      - name: Show container logs
+        if: always()
+        run: docker logs api-test
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f api-test || true
