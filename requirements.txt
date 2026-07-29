@@ -1,8 +1,5 @@
-streamlit==1.59.2
+streamlit
 pandas
-numpy
+requests
+plotly
 pyarrow
-faiss-cpu
-sentence-transformers
-torch
-scikit-learn

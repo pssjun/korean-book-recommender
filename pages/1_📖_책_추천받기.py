@@ -1,110 +1,81 @@
 """
 Page 1 - 책 추천받기 (Path A / Path B)
-Streamlit Cloud 최적화 + 세련된 카드 UI
+FastAPI 백엔드를 호출하는 프론트엔드 전용 구현
 """
+import os
 import streamlit as st
 import pandas as pd
-import numpy as np
-import json
-import faiss
-from pathlib import Path
+import requests
 
-# 페이지 설정
-st.set_page_config(
-    page_title="책 추천받기",
-    page_icon="📖",
-    layout="wide"
-)
-
-# 브라우저 자동 번역 방지
+st.set_page_config(page_title="책 추천받기", page_icon="📖", layout="wide")
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
 # =========================
-# 가벼운 자원만 즉시 로드
+# API 설정
 # =========================
-@st.cache_data
-def load_config():
-    with open("data/config.json", "r", encoding="utf-8") as f:
-        return json.load(f)
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
-@st.cache_data
-def load_books():
-    return pd.read_parquet("data/books_streamlit.parquet")
 
-@st.cache_data
-def load_tags():
-    with open("data/tag_templates.json", "r", encoding="utf-8") as f:
-        return json.load(f)
+def call_api(endpoint: str, payload: dict, timeout: int = 60):
+    """추천 API 호출"""
+    try:
+        res = requests.post(f"{API_BASE_URL}{endpoint}", json=payload, timeout=timeout)
+        res.raise_for_status()
+        return res.json(), None
+    except requests.exceptions.ConnectionError:
+        return None, "API 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요."
+    except requests.exceptions.Timeout:
+        return None, "요청 시간이 초과되었습니다."
+    except requests.exceptions.HTTPError as e:
+        detail = ""
+        try:
+            detail = res.json().get("detail", "")
+        except Exception:
+            pass
+        return None, f"API 오류 ({res.status_code}): {detail or e}"
+    except Exception as e:
+        return None, f"알 수 없는 오류: {e}"
 
-@st.cache_resource
-def load_faiss():
-    return faiss.read_index("models/faiss_index.bin")
 
-config = load_config()
-df_books = load_books()
-tag_templates = load_tags()
-faiss_index = load_faiss()
+@st.cache_data(ttl=60)
+def check_api_health():
+    """API 헬스체크"""
+    try:
+        res = requests.get(f"{API_BASE_URL}/health", timeout=5)
+        return res.json() if res.ok else None
+    except Exception:
+        return None
 
-# =========================
-# SentenceBERT 지연 로딩
-# =========================
-@st.cache_resource
-def load_sbert_model():
-    from sentence_transformers import SentenceTransformer
-    return SentenceTransformer(
-        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-        device="cpu"
-    )
 
-# =========================
-# 검색 로직 함수
-# =========================
-def run_recommendation(query_text_or_texts, alpha, is_tag=False):
-    sbert_model = load_sbert_model()
+@st.cache_data(ttl=300)
+def fetch_tags():
+    """사용 가능한 태그 목록 조회"""
+    try:
+        res = requests.get(f"{API_BASE_URL}/tags", timeout=5)
+        return res.json().get("tags", []) if res.ok else []
+    except Exception:
+        return []
 
-    if is_tag:
-        query_embed = sbert_model.encode(
-            [query_text_or_texts],
-            convert_to_numpy=True,
-            normalize_embeddings=True
-        ).astype(np.float32)
-        user_vector = query_embed
-    else:
-        query_embeds = sbert_model.encode(
-            query_text_or_texts,
-            convert_to_numpy=True,
-            normalize_embeddings=True
-        )
-        user_vector = query_embeds.mean(axis=0, keepdims=True).astype(np.float32)
-        user_vector /= np.linalg.norm(user_vector)
-
-    top_k = 20
-    similarities, indices = faiss_index.search(user_vector, top_k)
-
-    results = df_books.iloc[indices[0]].copy()
-    results["content_similarity"] = similarities[0]
-
-    sim_min = results["content_similarity"].min()
-    sim_max = results["content_similarity"].max()
-    if sim_max > sim_min:
-        results["content_normalized"] = (results["content_similarity"] - sim_min) / (sim_max - sim_min)
-    else:
-        results["content_normalized"] = 1.0
-
-    results["hybrid_score"] = alpha * results["content_normalized"] + (1 - alpha) * results["popularity_score"]
-    results = results.sort_values("hybrid_score", ascending=False).head(10).reset_index(drop=True)
-
-    return results
 
 # =========================
-# 헤더
+# 헤더 + API 상태
 # =========================
 st.title("📖 책 추천받기")
 st.caption("좋아하는 책 3권을 알려주시거나, 취향 태그를 선택하시면 유사한 한국 도서를 추천해드립니다.")
 
-if "first_visit" not in st.session_state:
-    st.info("💡 **첫 검색 시 AI 모델 로딩으로 30초~1분 소요됩니다.** 이후 검색은 즉시 실행됩니다.")
-    st.session_state.first_visit = True
+health = check_api_health()
+if health and health.get("model_loaded"):
+    st.success(
+        f"✅ 추천 API 연결됨 · 도서 {health.get('total_books', 0):,}권 · "
+        f"인덱스 {health.get('index_size', 0):,}개"
+    )
+else:
+    st.error(
+        f"❌ 추천 API에 연결할 수 없습니다 ({API_BASE_URL})\n\n"
+        "터미널에서 다음 명령으로 API 서버를 실행해주세요:\n\n"
+        "`docker run -p 8000:8000 book-recommender-api`"
+    )
+    st.stop()
 
 st.divider()
 
@@ -114,18 +85,16 @@ st.divider()
 TAG_CATEGORIES = {
     "📚 장르 (Genre)": ["소설", "에세이", "자기계발", "시", "인문", "과학"],
     "🎨 서브 장르 (Sub-genre)": ["힐링", "판타지", "SF", "추리", "성장", "로맨스"],
-    "🎭 분위기 (Mood)": ["따뜻한", "묵직한", "유쾌한", "감동적인", "깊이있는", "긴장감"]
+    "🎭 분위기 (Mood)": ["따뜻한", "묵직한", "유쾌한", "감동적인", "깊이있는", "긴장감"],
 }
 
 # =========================
-# 세션 상태 초기화
+# 세션 상태
 # =========================
 if "path_selected" not in st.session_state:
     st.session_state.path_selected = None
-if "results" not in st.session_state:
-    st.session_state.results = None
-if "used_alpha" not in st.session_state:
-    st.session_state.used_alpha = 0.7
+if "api_response" not in st.session_state:
+    st.session_state.api_response = None
 
 # =========================
 # 진입 화면
@@ -146,9 +115,8 @@ if st.session_state.path_selected is None:
             **적합한 경우:**
             - 취향이 명확한 편이다
             - 최근 감명 깊게 읽은 책이 있다
-            - 특정 저자·주제에 관심이 있다
             """)
-            if st.button("✍️ Path A로 시작", use_container_width=True, type="primary", key="path_a_btn"):
+            if st.button("✍️ Path A로 시작", use_container_width=True, type="primary"):
                 st.session_state.path_selected = "A"
                 st.rerun()
 
@@ -161,102 +129,90 @@ if st.session_state.path_selected is None:
 
             **적합한 경우:**
             - 처음 책을 골라보는 초심자
-            - 취향이 애매하거나 새로운 발견을 원함
-            - 여러 장르를 탐색하고 싶다
+            - 새로운 발견을 원함
             """)
-            if st.button("🎨 Path B로 시작", use_container_width=True, key="path_b_btn"):
+            if st.button("🎨 Path B로 시작", use_container_width=True):
                 st.session_state.path_selected = "B"
                 st.rerun()
 
     st.divider()
-    with st.expander("💡 이 추천 시스템은 어떻게 작동하나요?"):
-        st.markdown("""
-        - **SentenceBERT**: 다국어 언어 모델로 도서를 벡터로 변환
-        - **FAISS**: 6,974권의 한국 도서 임베딩에서 유사도 상위 K개를 밀리초 단위로 검색
-        - **하이브리드**: 콘텐츠 유사도 + 인기 신호를 α 파라미터로 결합
-        - **최종 점수 = α × 콘텐츠 유사도 + (1-α) × 인기 점수**
+    with st.expander("🏗️ 시스템 아키텍처"):
+        st.markdown(f"""
+        이 서비스는 **프론트엔드와 추천 엔진이 분리된 구조**로 동작합니다.Streamlit (Frontend)
+          │  HTTP POST
+          ▼
+    FastAPI (Docker Container)
+          ├─ SentenceBERT 임베딩
+          ├─ FAISS 유사도 검색
+          └─ 하이브리드 스코어 결합- **API Base URL**: `{API_BASE_URL}`
+        - 모델은 API 서버 기동 시 1회만 로딩되어 메모리에 상주합니다
+        - 요청별 처리 시간은 응답의 `elapsed_ms` 필드로 확인 가능합니다
         """)
 
     st.stop()
 
 # =========================
-# 경로 변경 옵션
+# 경로 변경 + α 슬라이더
 # =========================
 c1, c2 = st.columns([5, 1])
 with c1:
-    if st.session_state.path_selected == "A":
-        st.subheader("✍️ Path A: 좋아하는 책 입력")
-    else:
-        st.subheader("🎨 Path B: 태그 선택")
+    st.subheader("✍️ Path A: 좋아하는 책 입력" if st.session_state.path_selected == "A" else "🎨 Path B: 태그 선택")
 with c2:
     if st.button("🔄 경로 변경", use_container_width=True):
         st.session_state.path_selected = None
-        st.session_state.results = None
+        st.session_state.api_response = None
         st.rerun()
 
-# =========================
-# α 슬라이더
-# =========================
 alpha = st.slider(
-    "🎚️ 개인화 강도 (α)",
-    min_value=0.0,
-    max_value=1.0,
-    value=0.7,
-    step=0.1,
+    "🎚️ 개인화 강도 (α)", min_value=0.0, max_value=1.0, value=0.7, step=0.1,
     help="1.0 = 순수 콘텐츠 유사도 / 0.0 = 순수 인기순 / 0.7 = 균형(권장)"
 )
 
-alpha_desc = ""
 if alpha >= 0.8:
-    alpha_desc = "🎯 **개인화 강조**: 취향과 유사한 도서 우선"
+    st.caption("🎯 **개인화 강조**: 취향과 유사한 도서 우선")
 elif alpha >= 0.5:
-    alpha_desc = "⚖️ **균형**: 개인화와 인기의 균형 (권장)"
+    st.caption("⚖️ **균형**: 개인화와 인기의 균형 (권장)")
 else:
-    alpha_desc = "🔥 **인기 강조**: 대중적으로 인기 있는 도서 우선"
-
-st.caption(alpha_desc)
+    st.caption("🔥 **인기 강조**: 대중적으로 인기 있는 도서 우선")
 
 st.divider()
 
 # =========================
-# Path A: 주관식 입력
+# Path A
 # =========================
 if st.session_state.path_selected == "A":
-    st.markdown("**좋아하는 책 3권을 입력해주세요.**  \n(제목만이든, 제목+간단한 설명이든 자유롭게)")
+    st.markdown("**좋아하는 책 3권을 입력해주세요.**")
 
     with st.expander("💡 입력 예시 보기"):
-        st.code("""
-달러구트 꿈 백화점 - 잠들어야 입장 가능한 신비로운 꿈 백화점
-불편한 편의점 - 서울역 노숙자와 편의점 이야기
-미드나잇 라이브러리 - 인생의 다른 선택들을 담은 무한한 도서관
-        """, language=None)
+        st.code("""달러구트 꿈 백화점
+미드나잇 라이브러리
+불편한 편의점""", language=None)
 
-    book_1 = st.text_input("📕 첫 번째 좋아하는 책", placeholder="예: 달러구트 꿈 백화점")
-    book_2 = st.text_input("📗 두 번째 좋아하는 책", placeholder="예: 미드나잇 라이브러리")
-    book_3 = st.text_input("📘 세 번째 좋아하는 책", placeholder="예: 불편한 편의점")
+    book_1 = st.text_input("📕 첫 번째", placeholder="예: 달러구트 꿈 백화점")
+    book_2 = st.text_input("📗 두 번째", placeholder="예: 미드나잇 라이브러리")
+    book_3 = st.text_input("📘 세 번째", placeholder="예: 불편한 편의점")
 
     queries = [b for b in [book_1, book_2, book_3] if b.strip()]
 
     if st.button("🔍 추천받기", type="primary", disabled=len(queries) == 0, use_container_width=True):
-        with st.spinner("🤖 AI 모델 로딩 & 유사 도서 검색 중..."):
-            try:
-                results = run_recommendation(queries, alpha, is_tag=False)
-                st.session_state.results = results
-                st.session_state.used_alpha = alpha
-                st.session_state.input_summary = ", ".join(queries)
-                st.session_state.path_used = "A"
-                st.success("✅ 추천 완료!")
-            except Exception as e:
-                st.error(f"❌ 검색 중 오류: {str(e)}")
+        with st.spinner("🤖 추천 API 호출 중..."):
+            data, err = call_api(
+                "/recommend/path-a",
+                {"books": queries, "top_k": 10, "alpha": alpha},
+            )
+        if err:
+            st.error(err)
+        else:
+            st.session_state.api_response = data
+            st.success(f"✅ 추천 완료! (처리 시간: {data['elapsed_ms']}ms)")
 
 # =========================
-# Path B: 태그 선택
+# Path B
 # =========================
 else:
-    st.markdown("**취향에 맞는 태그를 골라주세요.**  \n(카테고리별로 여러 개 선택 가능)")
+    st.markdown("**취향에 맞는 태그를 골라주세요.**")
 
     selected_tags = []
-
     for category, tags in TAG_CATEGORIES.items():
         st.markdown(f"**{category}**")
         cols = st.columns(len(tags))
@@ -270,259 +226,93 @@ else:
         st.info(f"🏷️ 선택된 태그: {', '.join(selected_tags)}")
 
     if st.button("🔍 추천받기", type="primary", disabled=len(selected_tags) == 0, use_container_width=True):
-        with st.spinner("🤖 AI 모델 로딩 & 태그 매칭 중..."):
-            try:
-                tag_texts = [tag_templates.get(t, t) for t in selected_tags]
-                combined = " . ".join(tag_texts)
-
-                results = run_recommendation(combined, alpha, is_tag=True)
-                st.session_state.results = results
-                st.session_state.used_alpha = alpha
-                st.session_state.input_summary = ", ".join(selected_tags)
-                st.session_state.path_used = "B"
-                st.success("✅ 추천 완료!")
-            except Exception as e:
-                st.error(f"❌ 검색 중 오류: {str(e)}")
+        with st.spinner("🤖 추천 API 호출 중..."):
+            data, err = call_api(
+                "/recommend/path-b",
+                {"tags": selected_tags, "top_k": 10, "alpha": alpha},
+            )
+        if err:
+            st.error(err)
+        else:
+            st.session_state.api_response = data
+            st.success(f"✅ 추천 완료! (처리 시간: {data['elapsed_ms']}ms)")
 
 # =========================
 # 결과 표시
 # =========================
-if st.session_state.results is not None:
-    results = st.session_state.results
-    used_alpha = st.session_state.used_alpha
-    input_summary = st.session_state.input_summary
-    path_used = st.session_state.path_used
+if st.session_state.api_response:
+    data = st.session_state.api_response
+    results = data["results"]
 
     st.divider()
-
-    st.markdown(f"### 🎁 추천 결과 Top 10")
-    st.caption(f"경로: **Path {path_used}** | α: **{used_alpha}** | 입력: _{input_summary}_")
-
-    view_mode = st.radio(
-        "표시 방식",
-        ["📇 카드 뷰", "📋 테이블 뷰"],
-        horizontal=True
+    st.markdown("### 🎁 추천 결과 Top 10")
+    st.caption(
+        f"경로: **Path {data['path']}** | α: **{data['alpha']}** | "
+        f"입력: _{data['query_summary']}_ | "
+        f"검색 대상: {data['total_books_searched']:,}권 | "
+        f"처리 시간: {data['elapsed_ms']}ms"
     )
 
-    if view_mode == "📇 카드 뷰":
-        # 커스텀 CSS
-        st.markdown("""
-        <style>
-        .book-card {
-            background: linear-gradient(145deg, #1E1E2E, #2A2A3E);
-            border-radius: 16px;
-            padding: 20px;
-            margin-bottom: 16px;
-            border: 1px solid rgba(255,255,255,0.08);
-            transition: all 0.3s ease;
-        }
-        .book-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-            border: 1px solid rgba(46, 134, 171, 0.4);
-        }
-        .book-title {
-            font-size: 16px;
-            font-weight: 700;
-            color: #ffffff;
-            margin-bottom: 8px;
-            line-height: 1.4;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-        }
-        .book-meta {
-            color: #A0A0B0;
-            font-size: 13px;
-            margin-bottom: 4px;
-        }
-        .book-rank {
-            display: inline-block;
-            background: linear-gradient(135deg, #2E86AB, #4A9FD1);
-            color: white;
-            padding: 3px 10px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 600;
-            margin-bottom: 10px;
-        }
-        .score-bar-container {
-            margin-top: 12px;
-        }
-        .score-label {
-            display: flex;
-            justify-content: space-between;
-            font-size: 11px;
-            color: #888;
-            margin-bottom: 3px;
-        }
-        .score-bar {
-            height: 6px;
-            background: rgba(255,255,255,0.08);
-            border-radius: 3px;
-            overflow: hidden;
-        }
-        .score-fill {
-            height: 100%;
-            border-radius: 3px;
-            transition: width 0.5s ease;
-        }
-        .fill-similarity {
-            background: linear-gradient(90deg, #2E86AB, #4A9FD1);
-        }
-        .fill-popularity {
-            background: linear-gradient(90deg, #F39C12, #F5B041);
-        }
-        .fill-hybrid {
-            background: linear-gradient(90deg, #27AE60, #2ECC71);
-        }
-        .aladin-link {
-            display: inline-block;
-            margin-top: 10px;
-            padding: 6px 14px;
-            background: rgba(46, 134, 171, 0.15);
-            color: #4A9FD1;
-            border-radius: 8px;
-            text-decoration: none;
-            font-size: 12px;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-        .aladin-link:hover {
-            background: rgba(46, 134, 171, 0.3);
-            color: #6BB6E0;
-        }
-        </style>
-        """, unsafe_allow_html=True)
+    view_mode = st.radio("표시 방식", ["📇 카드 뷰", "📋 테이블 뷰"], horizontal=True)
 
+    if view_mode == "📇 카드 뷰":
         for i in range(0, len(results), 2):
             cols = st.columns(2, gap="medium")
             for j, col in enumerate(cols):
                 idx = i + j
                 if idx >= len(results):
                     break
-                book = results.iloc[idx]
-
-                cover_url = book.get("cover_url", "")
-                if pd.isna(cover_url) or not cover_url:
-                    cover_url = ""
-
-                title = book["title"]
-                author = book["author_clean"]
-                cat_main = book["cat_main"]
-                cat_mid = book["cat_mid"]
-                sim = book["content_similarity"]
-                pop = book["popularity_score"]
-                hyb = book["hybrid_score"]
-                link = book.get("link", "")
-                if pd.isna(link):
-                    link = ""
-
-                sim_pct = min(100, max(0, sim * 100))
-                pop_pct = pop * 100
-                hyb_pct = hyb * 100
-
-                link_html = f'<a href="{link}" target="_blank" class="aladin-link">📚 알라딘에서 보기 →</a>' if link else ""
-
-                if cover_url:
-                    img_html = f'<img src="{cover_url}" style="width:100px; height:140px; object-fit:cover; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.3);"/>'
-                else:
-                    img_html = '<div style="width:100px; height:140px; background:#2a2a3e; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:32px;">📕</div>'
-
-                card_html = f"""
-                <div class="book-card">
-                    <div style="display:flex; gap:16px;">
-                        <div style="flex-shrink:0;">
-                            {img_html}
-                        </div>
-                        <div style="flex-grow:1; min-width:0;">
-                            <div class="book-rank">#{idx+1} 추천</div>
-                            <div class="book-title">{title}</div>
-                            <div class="book-meta">✍️ {author}</div>
-                            <div class="book-meta">🏷️ {cat_main} · {cat_mid}</div>
-                            {link_html}
-                        </div>
-                    </div>
-                    <div class="score-bar-container">
-                        <div class="score-label">
-                            <span>🎯 콘텐츠 유사도</span>
-                            <span style="color:#4A9FD1; font-weight:600;">{sim:.3f}</span>
-                        </div>
-                        <div class="score-bar">
-                            <div class="score-fill fill-similarity" style="width:{sim_pct}%;"></div>
-                        </div>
-                    </div>
-                    <div class="score-bar-container">
-                        <div class="score-label">
-                            <span>🔥 인기도</span>
-                            <span style="color:#F5B041; font-weight:600;">{pop:.3f}</span>
-                        </div>
-                        <div class="score-bar">
-                            <div class="score-fill fill-popularity" style="width:{pop_pct}%;"></div>
-                        </div>
-                    </div>
-                    <div class="score-bar-container">
-                        <div class="score-label">
-                            <span>⭐ 최종 점수</span>
-                            <span style="color:#2ECC71; font-weight:700; font-size:14px;">{hyb:.3f}</span>
-                        </div>
-                        <div class="score-bar">
-                            <div class="score-fill fill-hybrid" style="width:{hyb_pct}%;"></div>
-                        </div>
-                    </div>
-                </div>
-                """
-
+                book = results[idx]
                 with col:
-                    st.markdown(card_html, unsafe_allow_html=True)
+                    with st.container(border=True):
+                        img_col, info_col = st.columns([1, 3])
+                        with img_col:
+                            if book.get("cover_url"):
+                                st.image(book["cover_url"], use_container_width=True)
+                            else:
+                                st.markdown("📕")
+                        with info_col:
+                            st.markdown(f"**#{book['rank']} · {book['title']}**")
+                            st.caption(f"저자: {book['author']}")
+                            st.caption(f"{book['category_main']} > {book['category_mid']}")
 
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric("유사도", f"{book['content_similarity']:.3f}")
+                        m2.metric("인기도", f"{book['popularity_score']:.3f}")
+                        m3.metric("최종", f"{book['hybrid_score']:.3f}")
+
+                        if book.get("link"):
+                            st.markdown(f"[📚 알라딘에서 보기]({book['link']})")
     else:
-        display_df = results[["title", "author_clean", "cat_main", "cat_mid",
-                             "content_similarity", "popularity_score", "hybrid_score"]].copy()
-        display_df.columns = ["제목", "저자", "대분류", "중분류", "콘텐츠 유사도", "인기 점수", "하이브리드 점수"]
-        display_df.index = range(1, len(display_df) + 1)
-
-        styled = (
-            display_df.style
-            .format({
+        df = pd.DataFrame(results)[
+            ["rank", "title", "author", "category_main", "category_mid",
+             "content_similarity", "popularity_score", "hybrid_score"]
+        ]
+        df.columns = ["순위", "제목", "저자", "대분류", "중분류", "콘텐츠 유사도", "인기 점수", "하이브리드 점수"]
+        st.dataframe(
+            df.style.format({
                 "콘텐츠 유사도": "{:.4f}",
                 "인기 점수": "{:.4f}",
-                "하이브리드 점수": "{:.4f}"
-            })
-            .background_gradient(subset=["하이브리드 점수"], cmap="Blues")
-            .set_properties(**{"text-align": "left", "padding": "8px"})
-            .set_table_styles([
-                {"selector": "th",
-                 "props": [("background-color", "#2E86AB"), ("color", "white"),
-                           ("font-weight", "bold"), ("padding", "10px")]}
-            ])
+                "하이브리드 점수": "{:.4f}",
+            }).background_gradient(subset=["하이브리드 점수"], cmap="Blues"),
+            use_container_width=True,
+            hide_index=True,
         )
-        st.dataframe(styled, use_container_width=True)
 
     st.divider()
-
     with st.expander("🔍 이 추천은 어떻게 만들어졌나요?"):
         st.markdown(f"""
-        **입력 정보 처리:**
-        - 입력하신 내용을 다국어 SentenceBERT로 벡터화
-        - Path A: 3권의 벡터를 평균 내어 취향 벡터 생성
-        - Path B: 태그를 자연어로 변환 후 벡터화
+        **처리 흐름**
+        1. Streamlit이 사용자 입력을 받아 FastAPI에 HTTP POST 요청
+        2. API 서버가 입력을 SentenceBERT로 벡터화
+        3. FAISS로 {data['total_books_searched']:,}권 중 유사 도서 검색
+        4. 콘텐츠 유사도와 인기 신호를 α로 결합해 최종 순위 산출
 
-        **검색:**
-        - FAISS로 6,974권 도서 임베딩에서 유사도 상위 20개 후보 추출
-        - 시간 복잡도: O(log N) - 밀리초 단위로 완료
+        **최종 점수** = {data['alpha']} × 콘텐츠 유사도 + {1 - data['alpha']:.1f} × 인기 점수
 
-        **하이브리드 결합:**
-        - 콘텐츠 유사도 정규화 (0~1 스케일)
-        - 알라딘 rating 기반 인기 점수와 결합
-        - **최종 점수 = {used_alpha} × 콘텐츠 유사도 + {1-used_alpha:.1f} × 인기 점수**
-
-        **α = {used_alpha}의 의미:**
-        - α > 0.5: 개인화 우선 (취향에 가까운 도서 상위)
-        - α < 0.5: 인기 우선 (많은 사람이 좋아하는 도서 상위)
+        **이번 요청 처리 시간**: {data['elapsed_ms']}ms
         """)
 
     if st.button("🔄 다른 조건으로 다시 추천받기", use_container_width=True):
-        st.session_state.results = None
+        st.session_state.api_response = None
         st.rerun()

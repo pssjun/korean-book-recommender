@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Streamlit (API 컨테이너에는 불필요)
+streamlit_app.py
+pages/
+.streamlit/
+
+# 개발/문서 파일
+notebooks/
+*.ipynb
+README.md
+*.md
+.git/
+.gitignore
+
+# 대용량 원본 데이터 (가공된 data/만 사용)
+data/raw/
+data/interim/
+
+# 기타
+.DS_Store
+*.log
