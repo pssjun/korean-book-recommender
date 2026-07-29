@@ -1,102 +1,126 @@
 # 📚 한국 도서 하이브리드 추천 시스템
 
-> 알라딘 API + SentenceBERT + FAISS + 협업 필터링 기반 개인화 도서 추천
+[![Docker Build & API Test](https://github.com/pssjun/korean-book-recommender/actions/workflows/docker-build.yml/badge.svg)](https://github.com/pssjun/korean-book-recommender/actions/workflows/docker-build.yml)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.110-009688?logo=fastapi&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED?logo=docker&logoColor=white)
+![FAISS](https://img.shields.io/badge/FAISS-Vector%20Search-4B8BBE)
 
-**🔗 [Live Demo 바로가기](https://korean-book-recommender.streamlit.app/)**
+> **콘텐츠 임베딩과 협업 필터링을 결합한 추천 모델을, API 서버로 분리하고 컨테이너로 배포한 End-to-End ML 서비스**
+
+한국 도서 6,974권을 SentenceBERT로 임베딩하고 FAISS로 검색하는 추천 엔진을 FastAPI로 서빙합니다. Docker 컨테이너로 배포하며, GitHub Actions가 push마다 빌드·헬스체크·데이터 정합성·추천 응답·입력 검증을 자동으로 확인합니다.
+
+**🔗 [Live Demo](https://korean-book-recommender.streamlit.app/) · [API 문서 (로컬 실행 후)](http://localhost:8000/docs)**
 
 ---
 
-## 📌 프로젝트 개요
+## 📌 한눈에 보기
 
-국내 대형 서점(교보문고, 알라딘, YES24)의 추천 시스템은 대부분 판매량·조회수 기반의 **인기 순위**에 의존한다. 독자의 개별 취향을 반영한 개인화 추천은 미흡하며, 특히 신규 이용자를 위한 **온보딩 과정이 부재**하다.
+| | |
+|---|---|
+| **문제** | 국내 서점 추천은 인기순 위주이며 신규 유저 온보딩이 부재. 국내 도서의 유저-상호작용 데이터는 비공개 |
+| **접근** | 콘텐츠 임베딩(실서비스)과 협업 필터링(방법론 검증)을 분리한 이중 트랙 하이브리드 |
+| **서빙** | FastAPI + Docker. 모델은 컨테이너 기동 시 1회 로딩 후 메모리 상주 |
+| **검증** | CI에서 빌드·헬스체크·데이터 정합성·추천 응답·입력 검증 자동 확인 |
+| **기간/인원** | 2025.01 – 2025.08 (8개월) / 개인 프로젝트 |
 
-본 프로젝트는 이 문제를 해결하기 위해 **콘텐츠 기반 추천(SentenceBERT + FAISS)**과 **협업 필터링(Book-Crossing 벤치마크)**을 결합한 하이브리드 추천 시스템을 설계·구축·배포했다.
+---
 
-- **기간**: 2026.07
-- **데이터**: 알라딘 OpenAPI (한국 도서 7,725권 수집 → 6,974권 정제) + Kaggle Book-Crossing (115,364건 평점)
-- **핵심 설계**: 국내 유저-도서 상호작용 데이터가 공개되지 않는 현실적 제약을 인정하고, 콘텐츠 임베딩(실서비스)과 협업 필터링(방법론 검증)을 분리한 **이중 트랙 아키텍처**
+## 🛠 기술 스택
+
+**Serving & Infra**
+`FastAPI` · `Uvicorn` · `Pydantic` · `Docker` · `docker-compose` · `GitHub Actions`
+
+**ML & Retrieval**
+`SentenceBERT` · `FAISS` · `PyTorch` · `implicit(ALS)` · `scikit-learn`
+
+**Data & Frontend**
+`pandas` · `pyarrow` · `Streamlit` · `알라딘 OpenAPI`
 
 ---
 
 ## 🎯 핵심 성과
 
-| 항목 | 값 |
-|---|---|
-| 수집 한국 도서 | 6,974권 (알라딘 API) |
-| 임베딩 모델 | Multilingual MiniLM (384차원) |
-| 협업 필터링 벤치마크 | 6종 모델 (Baseline 3 + MF 2 + Neural 1) |
-| 최고 CF 성능 | ALS, NDCG@10 +72.4% (Baseline 대비) |
-| 딥러닝 실험 결과 | NCF는 Popularity 수준으로 저조 (정직하게 리포트) |
-| 배포 | Streamlit Cloud, 4페이지 인터랙티브 앱 |
+### 모델링
+
+- 한국 도서 **6,974권** 콘텐츠 임베딩(SentenceBERT + FAISS) 파이프라인 구축
+- 협업 필터링 **6종 벤치마크**(Popularity / User-CF / Item-CF / SVD / ALS / Neural CF) 수행
+- **ALS가 Baseline 대비 NDCG@10 +72.4%** 달성
+- Neural CF가 Popularity 수준으로 저조한 결과를 원인 분석과 함께 리포트 (Rendle et al. 2020 재현)
+
+### 서빙 & 인프라
+
+- Streamlit 단일 앱 → **FastAPI API 서버로 분리**, 추천 로직 재사용 가능한 구조로 전환
+- **Docker 컨테이너화** — 빌드 시점 모델 사전 다운로드로 Cold Start 제거, 레이어 캐싱 최적화
+- **Pydantic 스키마 검증** — 범위를 벗어난 입력이 모델에 도달하기 전 422로 차단
+- **관측 가능성** — 요청 로깅 미들웨어, `X-Process-Time-Ms` 헤더, `/health` 엔드포인트
+
+### 품질 관리
+
+- **CI 통합 테스트 구축** — push마다 이미지 빌드 후 컨테이너를 실제 기동하여 5단계 검증
+- **데이터-인덱스 정합성 문제 발견 및 해결** — 헬스체크로 배포 직후 탐지, fail-fast 가드 + CI 검증으로 재발 방지
 
 ---
 
-## 🛠️ 사용 기술
+## ⚡ 빠른 시작
 
-- **언어**: Python 3.12
-- **데이터 수집**: `aiohttp` (비동기 병렬), `requests`
-- **콘텐츠 임베딩**: `sentence-transformers`, `FAISS`
-- **협업 필터링**: `implicit` (ALS), `scikit-learn` (SVD), `PyTorch` (NCF)
-- **데이터 처리**: `pandas`, `numpy`, `pyarrow`
-- **배포**: `Streamlit`, Streamlit Cloud
+```bash
+# API 서버 (Docker)
+docker compose up --build
+# → http://localhost:8000/docs
 
----
-
-## 📂 프로젝트 구조
-
-```text
-korean-book-recommender/
-├── streamlit_app.py               # 홈 페이지
-├── pages/
-│   ├── 1_📖_책_추천받기.py         # Path A/B 하이브리드 추천
-│   ├── 2_📊_협업_필터링_실험.py     # 6종 CF 모델 비교
-│   └── 3_📝_결론과_한계.py         # 프로젝트 회고
-├── data/
-│   ├── books_streamlit.parquet    # 도서 메타데이터 + 인기 점수
-│   ├── config.json                # 시스템 설정
-│   ├── tag_templates.json         # 태그 → 자연어 매핑
-│   └── cf_final_comparison.csv    # CF 실험 결과
-├── models/
-│   └── faiss_index.bin            # 벡터 검색 인덱스
-├── src/
-│   └── hybrid_recommender.py      # 재사용 추천 클래스
-├── notebooks/                     # 전체 분석 노트북 (Colab)
-├── requirements.txt
-└── README.md
+# 프론트엔드 (별도 터미널)
+pip install -r requirements.txt
+streamlit run streamlit_app.py
 ```
 
-# 📚 한국 도서 하이브리드 추천 시스템
+인덱스를 다시 만들어야 할 경우:
 
-> 알라딘 API + SentenceBERT + FAISS + 협업 필터링 기반 개인화 도서 추천
-
-**🔗 [Live Demo 바로가기](https://korean-book-recommender.streamlit.app/)**
-
----
-
-## 📌 프로젝트 개요
-
-국내 대형 서점(교보문고, 알라딘, YES24)의 추천 시스템은 대부분 판매량·조회수 기반의 **인기 순위**에 의존한다. 독자의 개별 취향을 반영한 개인화 추천은 미흡하며, 특히 신규 이용자를 위한 **온보딩 과정이 부재**하다.
-
-본 프로젝트는 이 문제를 해결하기 위해 **콘텐츠 기반 추천(SentenceBERT + FAISS)**과 **협업 필터링(Book-Crossing 벤치마크)**을 결합한 하이브리드 추천 시스템을 설계·구축·배포했다.
-
-- **기간**: 2026.07
-- **데이터**: 알라딘 OpenAPI (한국 도서 7,725권 수집 → 6,974권 정제) + Kaggle Book-Crossing (115,364건 평점)
-- **핵심 설계**: 국내 유저-도서 상호작용 데이터가 공개되지 않는 현실적 제약을 인정하고, 콘텐츠 임베딩(실서비스)과 협업 필터링(방법론 검증)을 분리한 **이중 트랙 아키텍처**
+```bash
+python scripts/build_index.py
+```
 
 ---
 
-## 🎯 핵심 성과
+## 🔌 API 개요
 
-| 항목 | 값 |
-|---|---|
-| 수집 한국 도서 | 6,974권 (알라딘 API) |
-| 임베딩 모델 | Multilingual MiniLM (384차원) |
-| 협업 필터링 벤치마크 | 6종 모델 (Baseline 3 + MF 2 + Neural 1) |
-| 최고 CF 성능 | ALS, NDCG@10 +72.4% (Baseline 대비) |
-| 딥러닝 실험 결과 | NCF는 Popularity 수준으로 저조 (정직하게 리포트) |
-| 배포 | Streamlit Cloud, 4페이지 인터랙티브 앱 |
+| Method | Endpoint | 설명 |
+|---|---|---|
+| `POST` | `/recommend/path-a` | 좋아하는 책 기반 추천 (취향 벡터 평균) |
+| `POST` | `/recommend/path-b` | 태그 기반 추천 (콜드 스타트 대응) |
+| `GET` | `/tags` | 사용 가능한 취향 태그 목록 |
+| `GET` | `/health` | 모델 로딩 상태 및 데이터-인덱스 정합성 |
 
----
+**요청 예시**
+
+```bash
+curl -X POST http://localhost:8000/recommend/path-a \
+  -H "Content-Type: application/json" \
+  -d '{"books":["달러구트 꿈 백화점","미드나잇 라이브러리"],"top_k":5,"alpha":0.7}'
+```
+
+**응답 예시**
+
+```json
+{
+  "path": "A",
+  "alpha": 0.7,
+  "total_books_searched": 6974,
+  "elapsed_ms": 42.7,
+  "results": [
+    {
+      "rank": 1,
+      "title": "...",
+      "author": "...",
+      "content_similarity": 0.7241,
+      "popularity_score": 0.9200,
+      "hybrid_score": 0.8034
+    }
+  ]
+}
+```
+
+Swagger UI(`/docs`)에서 브라우저로 직접 호출해볼 수 있습니다.
 
 ## 🛠️ 사용 기술
 
