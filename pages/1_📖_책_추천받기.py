@@ -7,13 +7,28 @@ import streamlit as st
 import pandas as pd
 import requests
 
+import sys
+sys.path.append(".")
+from src import local_recommender
+
 st.set_page_config(page_title="책 추천받기", page_icon="📖", layout="wide")
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
-# =========================
-# API 설정
-# =========================
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+def _get_api_base_url() -> str:
+    """
+    API 주소 결정 우선순위:
+    1. Streamlit Secrets (클라우드 배포 시)
+    2. 환경 변수
+    3. localhost (로컬 개발 기본값)
+    """
+    try:
+        return st.secrets["API_BASE_URL"]
+    except Exception:
+        return os.getenv("API_BASE_URL", "http://localhost:8000")
+
+
+API_BASE_URL = _get_api_base_url()
+API_TIMEOUT = 2
 
 
 def call_api(endpoint: str, payload: dict, timeout: int = 60):
@@ -37,45 +52,101 @@ def call_api(endpoint: str, payload: dict, timeout: int = 60):
         return None, f"알 수 없는 오류: {e}"
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=60, show_spinner=False)
 def check_api_health():
-    """API 헬스체크"""
+    """API 헬스체크 (실패 시 None)"""
     try:
-        res = requests.get(f"{API_BASE_URL}/health", timeout=5)
+        res = requests.get(f"{API_BASE_URL}/health", timeout=API_TIMEOUT)
         return res.json() if res.ok else None
     except Exception:
         return None
 
 
-@st.cache_data(ttl=300)
-def fetch_tags():
-    """사용 가능한 태그 목록 조회"""
+def get_recommendations(mode: str, payload: dict):
+    """
+    추천 실행: API 우선, 실패 시 로컬 추론으로 폴백
+
+    Returns:
+        (result_dict, source) - source는 "api" 또는 "local"
+    """
+    endpoint = "/recommend/path-a" if mode == "A" else "/recommend/path-b"
+
+    # 1차: API 호출
     try:
-        res = requests.get(f"{API_BASE_URL}/tags", timeout=5)
-        return res.json().get("tags", []) if res.ok else []
+        res = requests.post(f"{API_BASE_URL}{endpoint}", json=payload, timeout=30)
+        if res.ok:
+            return res.json(), "api"
     except Exception:
-        return []
+        pass
+
+    # 2차: 로컬 폴백
+    if mode == "A":
+        return local_recommender.recommend_path_a(
+            payload["books"], payload["top_k"], payload["alpha"]
+        ), "local"
+    else:
+        return local_recommender.recommend_path_b(
+            payload["tags"], payload["top_k"], payload["alpha"]
+        ), "local"
+
+def get_explanation(data: dict) -> dict:
+    """
+    추천 이유 설명 요청 (API 우선, 실패 시 로컬 폴백)
+    실패해도 예외를 던지지 않고 explanation=None을 반환
+    """
+    payload = {
+        "query_summary": data["query_summary"],
+        "path": data["path"],
+        "books": data["results"][:5],
+    }
+
+    # 1차: API
+    try:
+        res = requests.post(f"{API_BASE_URL}/explain", json=payload, timeout=20)
+        if res.ok:
+            return res.json()
+    except Exception:
+        pass
+
+    # 2차: 로컬 폴백
+    try:
+        from src.local_explainer import explain_local
+        return explain_local(payload)
+    except Exception as e:
+        return {
+            "explanation": None,
+            "available": False,
+            "cached": False,
+            "elapsed_ms": 0.0,
+            "error": str(e),
+        }
 
 
 # =========================
-# 헤더 + API 상태
+# 헤더 + 실행 모드 표시
 # =========================
 st.title("📖 책 추천받기")
 st.caption("좋아하는 책 3권을 알려주시거나, 취향 태그를 선택하시면 유사한 한국 도서를 추천해드립니다.")
 
 health = check_api_health()
+
 if health and health.get("model_loaded"):
     st.success(
-        f"✅ 추천 API 연결됨 · 도서 {health.get('total_books', 0):,}권 · "
+        f"⚡ **API 서버 모드** · 도서 {health.get('total_books', 0):,}권 · "
         f"인덱스 {health.get('index_size', 0):,}개"
     )
 else:
-    st.error(
-        f"❌ 추천 API에 연결할 수 없습니다 ({API_BASE_URL})\n\n"
-        "터미널에서 다음 명령으로 API 서버를 실행해주세요:\n\n"
-        "`docker run -p 8000:8000 book-recommender-api`"
-    )
-    st.stop()
+    try:
+        stats = local_recommender.get_stats()
+        st.info(
+            f"🔄 **로컬 추론 모드** · 도서 {stats['total_books']:,}권 · "
+            f"인덱스 {stats['index_size']:,}개\n\n"
+            "추천 API 서버에 연결할 수 없어 앱 내부에서 직접 추론합니다. "
+            "결과는 API 모드와 동일합니다."
+        )
+    except Exception as e:
+        st.error(f"❌ 추천 자원을 불러올 수 없습니다: {e}")
+        st.stop()
 
 st.divider()
 
@@ -95,6 +166,8 @@ if "path_selected" not in st.session_state:
     st.session_state.path_selected = None
 if "api_response" not in st.session_state:
     st.session_state.api_response = None
+if "explanation_data" not in st.session_state:
+    st.session_state.explanation_data = None
 
 # =========================
 # 진입 화면
@@ -195,16 +268,18 @@ if st.session_state.path_selected == "A":
     queries = [b for b in [book_1, book_2, book_3] if b.strip()]
 
     if st.button("🔍 추천받기", type="primary", disabled=len(queries) == 0, use_container_width=True):
-        with st.spinner("🤖 추천 API 호출 중..."):
-            data, err = call_api(
-                "/recommend/path-a",
-                {"books": queries, "top_k": 10, "alpha": alpha},
-            )
-        if err:
-            st.error(err)
-        else:
-            st.session_state.api_response = data
-            st.success(f"✅ 추천 완료! (처리 시간: {data['elapsed_ms']}ms)")
+        with st.spinner("🤖 추천 생성 중... (최초 실행 시 모델 로딩으로 30초~1분 소요)"):
+            try:
+                data, source = get_recommendations(
+                    "A", {"books": queries, "top_k": 10, "alpha": alpha}
+                )
+                st.session_state.api_response = data
+                st.session_state.source = source
+                st.session_state.explanation_data = None 
+                label = "API 서버" if source == "api" else "로컬 추론"
+                st.success(f"✅ 추천 완료! ({label} · {data['elapsed_ms']}ms)")
+            except Exception as e:
+                st.error(f"추천 생성 실패: {e}")
 
 # =========================
 # Path B
@@ -226,16 +301,18 @@ else:
         st.info(f"🏷️ 선택된 태그: {', '.join(selected_tags)}")
 
     if st.button("🔍 추천받기", type="primary", disabled=len(selected_tags) == 0, use_container_width=True):
-        with st.spinner("🤖 추천 API 호출 중..."):
-            data, err = call_api(
-                "/recommend/path-b",
-                {"tags": selected_tags, "top_k": 10, "alpha": alpha},
-            )
-        if err:
-            st.error(err)
-        else:
-            st.session_state.api_response = data
-            st.success(f"✅ 추천 완료! (처리 시간: {data['elapsed_ms']}ms)")
+        with st.spinner("🤖 추천 생성 중... (최초 실행 시 모델 로딩으로 30초~1분 소요)"):
+            try:
+                data, source = get_recommendations(
+                    "B", {"tags": selected_tags, "top_k": 10, "alpha": alpha}
+                )
+                st.session_state.api_response = data
+                st.session_state.source = source
+                st.session_state.explanation_data = None
+                label = "API 서버" if source == "api" else "로컬 추론"
+                st.success(f"✅ 추천 완료! ({label} · {data['elapsed_ms']}ms)")
+            except Exception as e:
+                st.error(f"추천 생성 실패: {e}")
 
 # =========================
 # 결과 표시
@@ -246,12 +323,58 @@ if st.session_state.api_response:
 
     st.divider()
     st.markdown("### 🎁 추천 결과 Top 10")
+    # ---- RAG 기반 추천 이유 설명 ----
+    with st.container(border=True):
+        col_title, col_btn = st.columns([4, 1])
+        with col_title:
+            st.markdown("##### 💬 추천 이유")
+        with col_btn:
+            explain_clicked = st.button("설명 생성", use_container_width=True, key="explain_btn")
+
+        if explain_clicked or st.session_state.get("explanation_data"):
+            if explain_clicked:
+                with st.spinner("LLM이 추천 근거를 분석하고 있습니다..."):
+                    st.session_state.explanation_data = get_explanation(data)
+
+            exp = st.session_state.get("explanation_data", {})
+
+            if exp.get("explanation"):
+                st.write(exp["explanation"])
+                meta = []
+                if exp.get("cached"):
+                    meta.append("캐시 히트")
+                else:
+                    meta.append(f"{exp.get('elapsed_ms', 0):.0f}ms")
+                    model_label = exp.get("model", "Gemini")
+                st.caption(f"{model_label} · {' · '.join(meta)}")
+            elif not exp.get("available"):
+                st.info(
+                    "설명 기능이 설정되지 않았습니다. "
+                    "`GOOGLE_API_KEY` 환경 변수를 설정하면 추천 이유를 확인할 수 있습니다."
+                )
+            else:
+                st.warning(
+                    f"설명 생성에 실패했습니다. 추천 결과는 정상입니다.\n\n"
+                    f"원인: {exp.get('error', '알 수 없음')}"
+                )
+        else:
+            st.caption("버튼을 누르면 이 추천의 근거를 LLM이 설명합니다.")
     st.caption(
         f"경로: **Path {data['path']}** | α: **{data['alpha']}** | "
         f"입력: _{data['query_summary']}_ | "
         f"검색 대상: {data['total_books_searched']:,}권 | "
         f"처리 시간: {data['elapsed_ms']}ms"
     )
+    # 장르 필터 적용 상태
+    if data.get("filter_applied"):
+        cats = ", ".join(data.get("allowed_categories", []))
+        if data.get("filter_relaxed"):
+            st.warning(
+                f"🏷️ 장르 필터({cats})를 적용했으나 해당 범주 내 결과가 부족해 "
+                f"유사도 상위 도서로 일부를 채웠습니다."
+            )
+        else:
+            st.caption(f"🏷️ 장르 필터 적용: {cats}")
 
     view_mode = st.radio("표시 방식", ["📇 카드 뷰", "📋 테이블 뷰"], horizontal=True)
 

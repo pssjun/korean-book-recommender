@@ -7,6 +7,8 @@ import time
 import logging
 from pathlib import Path
 from typing import List, Tuple
+from typing import List, Tuple, Optional, Set
+from .genre_filter import resolve_allowed_categories, apply_category_filter
 
 import numpy as np
 import pandas as pd
@@ -75,16 +77,18 @@ class HybridRecommender:
         return vec
 
     def _search_and_blend(
-        self, query_vec: np.ndarray, top_k: int, alpha: float
-    ) -> pd.DataFrame:
-        """FAISS 검색 후 인기 신호와 하이브리드 결합"""
-        search_k = min(top_k * 3, self.faiss_index.ntotal)
+        self, query_vec: np.ndarray, top_k: int, alpha: float,
+        allowed_categories: Optional[Set[str]] = None,
+    ) -> Tuple[pd.DataFrame, dict]:
+        """FAISS 검색 → 하이브리드 스코어 → 카테고리 필터"""
+        # 필터가 있으면 여유 있게 가져온다 (over-fetch)
+        multiplier = 10 if allowed_categories else 3
+        search_k = min(top_k * multiplier, self.faiss_index.ntotal)
         similarities, indices = self.faiss_index.search(query_vec, search_k)
 
         results = self.books.iloc[indices[0]].copy()
         results["content_similarity"] = similarities[0]
 
-        # 유사도 정규화 (0~1)
         sim_min = results["content_similarity"].min()
         sim_max = results["content_similarity"].max()
         if sim_max > sim_min:
@@ -94,33 +98,45 @@ class HybridRecommender:
         else:
             results["content_normalized"] = 1.0
 
-        # 하이브리드 점수
         results["hybrid_score"] = (
             alpha * results["content_normalized"]
             + (1 - alpha) * results["popularity_score"]
         )
+        results = results.sort_values("hybrid_score", ascending=False)
 
-        results = results.sort_values("hybrid_score", ascending=False).head(top_k)
-        return results.reset_index(drop=True)
+        final, applied, relaxed = apply_category_filter(
+            results, allowed_categories, top_k
+        )
+
+        meta = {
+            "filter_applied": applied,
+            "filter_relaxed": relaxed,
+            "allowed_categories": sorted(allowed_categories) if allowed_categories else [],
+        }
+        return final.reset_index(drop=True), meta
 
     def recommend_path_a(
         self, books: List[str], top_k: int = 10, alpha: float = 0.7
-    ) -> Tuple[pd.DataFrame, float]:
-        """Path A: 좋아하는 책 기반 추천"""
+    ) -> Tuple[pd.DataFrame, float, dict]:
+        """Path A: 좋아하는 책 기반 추천 (장르 필터 미적용)"""
         start = time.perf_counter()
         query_vec = self._encode_query(books)
-        results = self._search_and_blend(query_vec, top_k, alpha)
+        results, meta = self._search_and_blend(query_vec, top_k, alpha)
         elapsed_ms = (time.perf_counter() - start) * 1000
-        return results, elapsed_ms
+        return results, elapsed_ms, meta
 
     def recommend_path_b(
         self, tags: List[str], top_k: int = 10, alpha: float = 0.7
-    ) -> Tuple[pd.DataFrame, float]:
-        """Path B: 태그 기반 추천"""
+    ) -> Tuple[pd.DataFrame, float, dict]:
+        """Path B: 태그 기반 추천 (장르 태그는 카테고리 필터로도 작동)"""
         start = time.perf_counter()
+
         tag_texts = [self.tag_templates.get(t, t) for t in tags]
         combined = " . ".join(tag_texts)
         query_vec = self._encode_query([combined])
-        results = self._search_and_blend(query_vec, top_k, alpha)
+
+        allowed = resolve_allowed_categories(tags)
+        results, meta = self._search_and_blend(query_vec, top_k, alpha, allowed)
+
         elapsed_ms = (time.perf_counter() - start) * 1000
-        return results, elapsed_ms
+        return results, elapsed_ms, meta

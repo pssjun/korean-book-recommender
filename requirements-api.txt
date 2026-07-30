@@ -7,3 +7,5 @@ faiss-cpu
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch
 sentence-transformers
+google-genai>=1.0.0
+python-dotenv>=1.0.0
