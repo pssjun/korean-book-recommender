@@ -3,17 +3,38 @@
 [![Docker Build & API Test](https://github.com/pssjun/korean-book-recommender/actions/workflows/docker-build.yml/badge.svg)](https://github.com/pssjun/korean-book-recommender/actions/workflows/docker-build.yml)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![Cloud Run](https://img.shields.io/badge/Cloud%20Run-Deployed-4285F4?logo=googlecloud&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED?logo=docker&logoColor=white)
 ![FAISS](https://img.shields.io/badge/FAISS-Vector%20Search-4B8BBE)
 ![Gemini](https://img.shields.io/badge/Gemini-RAG-8E75B2?logo=google&logoColor=white)
 
-> **콘텐츠 임베딩과 협업 필터링을 결합한 추천 모델을 API로 서빙하고, 컨테이너화·CI·RAG까지 확장한 End-to-End ML 서비스**
+> **추천 모델을 API로 서빙하고, 컨테이너화·CI·RAG·클라우드 배포까지 확장한 End-to-End ML 서비스**
 
 한국 도서 6,974권을 SentenceBERT로 임베딩하고 FAISS로 검색하는 추천 엔진을 FastAPI로 서빙합니다.
-Docker로 컨테이너화했으며, GitHub Actions가 push마다 컨테이너를 실제로 기동해 7가지 항목을 검증합니다.
-추천 근거 설명은 Gemini를 활용한 RAG로 생성합니다.
+Docker로 컨테이너화해 **Google Cloud Run에 배포**했으며, GitHub Actions가 push마다 컨테이너를
+실제로 기동해 7가지 항목을 검증합니다. 추천 근거 설명은 Gemini를 활용한 RAG로 생성합니다.
 
-🔗 **[Live Demo](https://korean-book-recommender.streamlit.app/)** · **[프로젝트 상세 리포트](./BOOK_OVERVIEW_KOR.md)**
+🔗 **[Live Demo](https://korean-book-recommender.streamlit.app/)** ·
+**[API 문서 (Swagger)](https://book-recommender-api-829972480350.asia-northeast3.run.app/docs)** ·
+**[프로젝트 상세 리포트](./BOOK_OVERVIEW_KOR.md)**
+
+---
+
+## 🧭 이 프로젝트에서 다룬 엔지니어링 주제
+
+모델 성능뿐 아니라 **모델을 서비스로 운영하는 과정에서 마주치는 문제들**을 다뤘습니다.
+
+| 주제 | 내용 |
+|---|---|
+| **모델 서빙** | 모델 1회 로딩 후 상주, Pydantic 입력 검증, 응답시간 계측 미들웨어 |
+| **컨테이너 이식성** | `PORT` 환경변수 대응으로 로컬(8000)·Cloud Run(8080) 동일 이미지 사용 |
+| **클라우드 배포** | Cloud Run 배포, Secret Manager 연동, IAM 권한 구성 |
+| **가용성 설계** | API 장애 시 프론트엔드 로컬 추론 폴백, 실행 모드 UI 노출 |
+| **관측 가능성** | 자원 정합성까지 검사하는 헬스체크, 요청 로깅 |
+| **CI 통합 테스트** | 컨테이너 실기동 후 7개 항목 자동 검증 |
+| **LLM 프로덕션 이슈** | 환각 억제, 캐싱, 모델 폴백 체인, 지연·비용 트레이드오프 |
+| **검색 품질** | 벡터 검색의 범주 미보장 문제를 메타데이터 필터로 보완 |
+| **비용 관리** | 인스턴스 상한, 이미지 정리 정책, 예산 알림 |
 
 ---
 
@@ -25,6 +46,7 @@ Docker로 컨테이너화했으며, GitHub Actions가 push마다 컨테이너를
 - [⚡ 빠른 시작](#-빠른-시작)
 - [🏗 시스템 아키텍처](#-시스템-아키텍처)
 - [🔌 API 개요](#-api-개요)
+- [☁️ Cloud Run 배포](#️-cloud-run-배포)
 - [🔄 아키텍처 전환: Streamlit 단일 앱 → API 분리](#-아키텍처-전환-streamlit-단일-앱--api-분리)
 - [🐳 Docker 구성](#-docker-구성)
 - [🔐 시크릿 관리](#-시크릿-관리)
@@ -32,7 +54,7 @@ Docker로 컨테이너화했으며, GitHub Actions가 push마다 컨테이너를
 - [🤖 RAG 기반 추천 이유 설명](#-rag-기반-추천-이유-설명)
 - [🏷 벡터 검색의 한계와 메타데이터 필터링](#-벡터-검색의-한계와-메타데이터-필터링)
 - [🔗 외부 의존성 관리](#-외부-의존성-관리)
-- [🔍 트러블슈팅: 데이터-인덱스 정합성](#-트러블슈팅-데이터-인덱스-정합성)
+- [🔍 트러블슈팅](#-트러블슈팅)
 - [💡 주요 발견](#-주요-발견)
 - [⚠️ 한계 및 향후 개선](#️-한계-및-향후-개선)
 - [📂 프로젝트 구조](#-프로젝트-구조)
@@ -46,6 +68,7 @@ Docker로 컨테이너화했으며, GitHub Actions가 push마다 컨테이너를
 | **문제** | 국내 서점 추천은 인기순 위주이며 신규 유저 온보딩이 부재. 국내 도서의 유저-상호작용 데이터는 비공개 |
 | **접근** | 콘텐츠 임베딩(실서비스)과 협업 필터링(방법론 검증)을 분리한 이중 트랙 하이브리드 |
 | **서빙** | FastAPI + Docker. 모델은 컨테이너 기동 시 1회 로딩 후 메모리 상주 |
+| **배포** | Google Cloud Run (asia-northeast3). Secret Manager로 키 주입, 0으로 스케일다운 |
 | **확장** | Gemini 기반 RAG로 추천 근거 설명 생성, 장르 메타데이터 필터링 |
 | **검증** | CI에서 컨테이너를 실제 기동해 7가지 항목 자동 확인 |
 | **기간/인원** | 2025.01 – 2025.08 (8개월) / 개인 프로젝트 |
@@ -64,7 +87,8 @@ Docker로 컨테이너화했으며, GitHub Actions가 push마다 컨테이너를
 ### 서빙 & 인프라
 
 - Streamlit 단일 앱 → **FastAPI API 서버로 분리**, 추천 로직을 재사용 가능한 구조로 전환
-- **Docker 컨테이너화** — 빌드 시점 모델 사전 다운로드로 Cold Start 제거, 레이어 캐싱 최적화
+- **Docker 컨테이너화** — 빌드 시점 모델 사전 다운로드로 Cold Start 완화, 레이어 캐싱 최적화
+- **Cloud Run 배포** — 동일 이미지가 로컬·클라우드 양쪽에서 동작하도록 `PORT` 대응
 - **Pydantic 스키마 검증** — 범위를 벗어난 입력이 모델에 도달하기 전 422로 차단
 - **관측 가능성** — 요청 로깅 미들웨어, `X-Process-Time-Ms` 헤더, 정합성까지 노출하는 `/health`
 - **이중화 폴백** — API 장애 시 프론트엔드 로컬 추론으로 자동 전환
@@ -90,9 +114,10 @@ Docker로 컨테이너화했으며, GitHub Actions가 push마다 컨테이너를
 - **협업 필터링**: `implicit` (ALS), `scikit-learn` (SVD), `PyTorch` (NCF)
 - **LLM / RAG**: `Gemini API`, `google-genai`
 - **API 서빙**: `FastAPI`, `Uvicorn`, `Pydantic`
+- **클라우드**: `Google Cloud Run`, `Artifact Registry`, `Secret Manager`, `Cloud Build`
 - **컨테이너 / CI**: `Docker`, `docker-compose`, `GitHub Actions`
 - **데이터 처리**: `pandas`, `numpy`, `pyarrow`
-- **프론트엔드**: `Streamlit` (Streamlit Cloud 배포)
+- **프론트엔드**: `Streamlit` (Streamlit Cloud)
 
 ---
 
@@ -132,27 +157,31 @@ python scripts/build_index.py
 
 ## 🏗 시스템 아키텍처
 
-프론트엔드와 추천 엔진을 분리하고, 추천 엔진을 컨테이너화했습니다.
+프론트엔드와 추천 엔진을 분리하고, 추천 엔진을 컨테이너화해 Cloud Run에 배포했습니다.
 
 ```mermaid
 flowchart LR
-    subgraph FE["Frontend"]
+    subgraph FE["Streamlit Cloud"]
         ST["Streamlit App<br/>UI 전담"]
+        LF["로컬 추론 폴백<br/>(API 장애 시)"]
     end
 
-    subgraph API["FastAPI Container"]
-        EP["/recommend/path-a<br/>/recommend/path-b<br/>/explain · /health"]
+    subgraph GCP["Google Cloud Run"]
+        EP["/recommend/path-a · path-b<br/>/explain · /health · /tags"]
         SB["SentenceBERT<br/>쿼리 임베딩"]
         FS["FAISS Index<br/>6,974 vectors"]
         HB["하이브리드 스코어<br/>+ 장르 필터"]
-        LLM["Gemini Flash-Lite<br/>추천 근거 설명"]
     end
 
-    ST -->|HTTP POST| EP
+    SM["Secret Manager<br/>API Key"]
+    LLM["Gemini Flash-Lite"]
+
+    ST -->|HTTPS POST| EP
+    ST -.->|실패 시| LF
     EP --> SB --> FS --> HB
-    HB --> LLM
-    HB -->|JSON Response| ST
-    LLM -->|explanation| ST
+    HB -->|JSON| ST
+    EP --> LLM
+    SM -.->|런타임 주입| EP
 ```
 
 **하이브리드 결합 공식**: `최종 점수 = α × 콘텐츠 유사도 + (1 − α) × 인기 신호`
@@ -165,6 +194,8 @@ flowchart LR
 
 ## 🔌 API 개요
 
+**Base URL**: `https://book-recommender-api-829972480350.asia-northeast3.run.app`
+
 | Method | Endpoint | 설명 |
 |---|---|---|
 | `POST` | `/recommend/path-a` | 좋아하는 책 기반 추천 (취향 벡터 평균) |
@@ -176,7 +207,7 @@ flowchart LR
 ### 요청 예시
 
 ```bash
-curl -X POST http://localhost:8000/recommend/path-b \
+curl -X POST https://book-recommender-api-829972480350.asia-northeast3.run.app/recommend/path-b \
   -H "Content-Type: application/json" \
   -d '{"tags":["소설","힐링"],"top_k":5,"alpha":0.7}'
 ```
@@ -210,6 +241,85 @@ curl -X POST http://localhost:8000/recommend/path-b \
 ```
 
 Swagger UI(`/docs`)에서 브라우저로 직접 호출해볼 수 있습니다.
+Cloud Run이 유휴 상태일 때 첫 요청은 콜드 스타트로 20~40초 소요됩니다.
+
+---
+
+## ☁️ Cloud Run 배포
+
+### 왜 Cloud Run인가
+
+| 후보 | 판단 |
+|---|---|
+| **Cloud Run** | ✅ 컨테이너 그대로 배포, 요청 없을 때 0으로 스케일다운, 무료 한도 내 운영 가능 |
+| VM (Compute Engine) | 상시 과금. 데모 트래픽 수준에 과함 |
+| 서버리스 함수 | 모델을 메모리에 상주시킬 수 없어 매 호출 로딩 발생 |
+
+**"요청이 없으면 비용이 0"** 이라는 특성이 포트폴리오 데모에 정확히 맞았습니다.
+동시에 컨테이너를 그대로 올릴 수 있어, 이미 만들어둔 Docker 이미지를 재사용할 수 있었습니다.
+
+### 배포 구성
+
+```bash
+gcloud run deploy book-recommender-api \
+  --source . \
+  --region asia-northeast3 \
+  --allow-unauthenticated \
+  --memory 2Gi \
+  --cpu 2 \
+  --timeout 300 \
+  --max-instances 3 \
+  --update-secrets GOOGLE_API_KEY=gemini-api-key:latest
+```
+
+| 옵션 | 값 | 근거 |
+|---|---|---|
+| `--region` | `asia-northeast3` | 서울 리전. 주 사용자 위치 기준 지연 최소화 |
+| `--memory` | `2Gi` | SentenceBERT + FAISS 인덱스 + PyTorch 상주 공간 |
+| `--cpu` | `2` | 모델 로딩 시간 단축 (기동 지연이 콜드 스타트 체감을 좌우) |
+| `--timeout` | `300` | 콜드 스타트 시 모델 로딩 시간 확보 |
+| `--max-instances` | `3` | **비용 상한 안전장치.** 트래픽 폭증 시 과금 폭발 방지 |
+| `--update-secrets` | Secret Manager | 키를 이미지·환경변수 평문에 두지 않음 |
+
+### 컨테이너 이식성: PORT 대응
+
+Cloud Run은 컨테이너에 `PORT` 환경변수를 주입하고(기본 8080), 애플리케이션이 그 포트를
+수신하지 않으면 배포를 실패 처리합니다. 로컬은 8000을 쓰고 있었으므로 **하나의 이미지가
+양쪽에서 동작하도록** Dockerfile을 조정했습니다.
+
+```dockerfile
+ENV PORT=8000
+CMD exec uvicorn api.main:app --host 0.0.0.0 --port ${PORT}
+```
+
+두 가지가 의도된 선택입니다.
+
+- **셸 형식 `CMD`** — JSON 배열 형식은 변수를 확장하지 않으므로 `${PORT}`가 문자열로
+  전달됩니다. 셸 형식이어야 치환됩니다.
+- **`exec`** — uvicorn을 PID 1로 만들어 컨테이너 종료 신호(SIGTERM)를 직접 받게 합니다.
+  이것이 없으면 셸이 PID 1이 되어 신호가 전달되지 않고, 종료가 강제 종료로 처리됩니다.
+
+Dockerfile을 환경별로 나누는 방법도 있었지만, **이미지가 갈라지면 로컬에서 검증한 것과
+배포된 것이 달라집니다.** 단일 이미지 유지를 우선했습니다.
+
+### 비용 관리
+
+배포 후 방치했을 때 비용이 새는 지점을 점검하고 통제 장치를 걸었습니다.
+
+| 지점 | 통제 |
+|---|---|
+| 트래픽 폭증 | `--max-instances 3` 으로 인스턴스 상한 고정 |
+| 유휴 시 과금 | Cloud Run 특성상 요청 없으면 0으로 스케일다운 |
+| **이미지 누적** | Artifact Registry 정리 정책 (최신 2개 유지 / 14일 경과 삭제) |
+| 예상치 못한 지출 | 프로젝트 예산 알림 설정 |
+
+이미지 하나가 약 1.09GB(PyTorch + 사전 다운로드 모델)라 배포를 반복하면 무료 저장 한도
+(0.5GB)를 빠르게 초과합니다. **배포 자동화보다 정리 정책이 먼저 필요한 케이스**였습니다.
+
+```bash
+gcloud artifacts repositories set-cleanup-policies cloud-run-source-deploy \
+  --location=asia-northeast3 --policy=cleanup-policy.json
+```
 
 ---
 
@@ -228,13 +338,14 @@ Swagger UI(`/docs`)에서 브라우저로 직접 호출해볼 수 있습니다.
 
 ### 전환 전후 비교
 
-| 항목 | Before (Streamlit 단일) | After (FastAPI + Docker) |
+| 항목 | Before (Streamlit 단일) | After (FastAPI + Cloud Run) |
 |---|---|---|
 | 모델 로딩 | 요청 시점 로딩 (지연 발생) | 컨테이너 기동 시 1회 로딩 후 메모리 상주 |
 | 추천 로직 위치 | UI 코드에 결합 | API 서버로 분리 (재사용 가능) |
 | 입력 검증 | 수동 처리 | Pydantic 스키마 자동 검증 (422 응답) |
 | 상태 확인 | 불가 | `/health` 엔드포인트 |
 | 응답 시간 측정 | 불가 | 미들웨어로 전 요청 기록 + `X-Process-Time-Ms` 헤더 |
+| 외부 연동 | 불가 | 공개 HTTPS API로 누구나 호출 가능 |
 
 ### 선택의 트레이드오프
 
@@ -245,8 +356,8 @@ Swagger UI(`/docs`)에서 브라우저로 직접 호출해볼 수 있습니다.
 **"모델을 서비스로 제공하는 구조"의 검증**이었기 때문입니다. 대신 분리로 생기는
 비용은 다음과 같이 완화했습니다.
 
-- **Cold Start**: Dockerfile 빌드 단계에서 모델을 사전 다운로드
-- **운영 복잡도**: `docker-compose.yml`로 단일 명령 기동
+- **Cold Start**: 빌드 단계에서 모델 사전 다운로드 + Cloud Run CPU 2코어 할당
+- **운영 복잡도**: `docker-compose.yml`로 로컬 단일 명령 기동, 클라우드는 단일 배포 명령
 - **가용성**: 아래 폴백 전략
 
 ### 폴백 전략: API 장애 시 로컬 추론
@@ -264,11 +375,10 @@ API 호출 (2초 타임아웃)
 
 - API 서버와 **동일한 로직·동일한 인덱스**를 사용하므로 결과가 일치합니다
 - 현재 실행 모드(API / 로컬)를 UI에 표시해 사용자가 상태를 인지할 수 있습니다
-- 데모 환경에서는 API 서버 없이도 전체 기능을 체험할 수 있습니다
+- Cloud Run 콜드 스타트나 장애 상황에서도 데모가 중단되지 않습니다
 
 성능 면에서는 API 모드가 유리하지만(모델이 서버에 상주), 가용성을 우선해 이중화를
-선택했습니다. 현재 Streamlit Cloud 데모는 API 서버가 클라우드에 배포되어 있지 않아
-로컬 추론 모드로 동작합니다.
+선택했습니다. 이 구조 덕분에 클라우드 배포 이전 단계에서도 데모를 유지할 수 있었습니다.
 
 ---
 
@@ -280,7 +390,8 @@ API 호출 (2초 타임아웃)
 |---|---|---|
 | Base Image | `python:3.12-slim` | 표준 이미지 대비 용량 절감 |
 | 레이어 순서 | 의존성 설치 → 코드 복사 | 코드 수정 시 패키지 재설치 생략 (캐시 활용) |
-| 모델 처리 | 빌드 시점 사전 다운로드 | 컨테이너 첫 실행 시 Cold Start 제거 |
+| 모델 처리 | 빌드 시점 사전 다운로드 | 컨테이너 첫 실행 시 다운로드 지연 제거 |
+| 포트 | `PORT` 환경변수 | 로컬(8000)·Cloud Run(8080) 단일 이미지 대응 |
 | 헬스체크 | `start_period` 90초 | 모델 로딩 + LLM 가용성 검증 시간 확보 |
 | `.dockerignore` | Streamlit·노트북·원본 데이터 제외 | 이미지 용량 및 빌드 시간 절감 |
 
@@ -301,19 +412,24 @@ docker compose up --build
 
 ## 🔐 시크릿 관리
 
-API 키를 이미지에 포함시키지 않고 런타임에 주입합니다.
+환경별로 다른 방식을 쓰되, **어느 경우에도 키가 이미지나 저장소에 남지 않도록** 했습니다.
+
+| 환경 | 방식 |
+|---|---|
+| 로컬 개발 | `.env` + `python-dotenv` 자동 로딩 |
+| 로컬 컨테이너 | `docker run --env-file .env` |
+| **Cloud Run** | **Secret Manager 마운트 (`--update-secrets`)** |
+| Streamlit Cloud | 플랫폼 Secrets |
 
 ```dockerfile
 # 이렇게 하지 않는다 — 이미지 레이어에 영구히 남아 이미지 공유 시 유출
 # ENV GOOGLE_API_KEY=...
 ```
 
-```bash
-docker run -p 8000:8000 --env-file .env book-recommender-api
-```
+Cloud Run에서는 Secret Manager의 `:latest` 버전을 참조하도록 설정해, **키 교체 시
+재배포 없이 새 버전만 추가**하면 되도록 했습니다. Secret Manager는 값을 덮어쓰지 않고
+버전을 쌓는 구조라 유출 시 특정 버전만 비활성화할 수 있습니다.
 
-로컬 개발에서는 `python-dotenv`로 `.env`를 자동 로딩하고, 컨테이너에서는 파일이
-없으므로 무시된 뒤 `--env-file`로 전달된 값을 사용합니다.
 `.env`와 `.streamlit/secrets.toml`은 `.gitignore`에 포함되어 있습니다.
 
 ---
@@ -474,41 +590,32 @@ MODEL_CANDIDATES = [
 
 ---
 
-## 🔍 트러블슈팅: 데이터-인덱스 정합성
+## 🔍 트러블슈팅
 
-### 발견
+### 1. 데이터-인덱스 정합성
 
-컨테이너 배포 후 `/health` 응답에서 불일치를 확인했습니다.
+**발견** — 컨테이너 배포 후 `/health` 응답에서 불일치를 확인했습니다.
 
 ```json
 { "status": "ok", "model_loaded": true, "index_size": 6881, "total_books": 6974 }
 ```
 
-### 문제의 심각성
-
-FAISS는 벡터를 **순번(index)** 으로 관리하고, 검색 결과의 순번으로 도서 메타데이터를
-조회합니다(`books.iloc[indices]`). 따라서 인덱스와 데이터프레임의 행 순서가 1:1로
-정확히 대응해야 합니다.
+**문제의 심각성** — FAISS는 벡터를 **순번(index)** 으로 관리하고, 검색 결과의 순번으로
+도서 메타데이터를 조회합니다(`books.iloc[indices]`). 따라서 인덱스와 데이터프레임의 행
+순서가 1:1로 정확히 대응해야 합니다.
 
 개수가 어긋났다는 것은 최소 93권이 검색 대상에서 누락되었거나, 최악의 경우 **행이 밀려
 잘못된 도서 정보가 반환**될 수 있음을 의미했습니다. 성능 지표로는 드러나지 않고 조용히
 잘못된 결과를 내보내는 유형의 결함입니다.
 
-### 원인
+**원인** — 임베딩 생성 시점의 원본 파일과 실제 서빙 파일이 서로 달랐습니다.
 
-임베딩 생성 시점의 원본 파일과 실제 서빙 파일이 서로 달라 정합성이 깨진 상태였습니다.
+**해결**
 
-### 해결
-
-**1. 재현 가능한 인덱스 빌드 스크립트** — 서빙에 사용하는 파일을 단일 기준(SSOT)으로
-삼아 인덱스를 생성하고, 생성 과정에서 행 수를 검증합니다.
-
-```bash
-python scripts/build_index.py
-```
-
-**2. 기동 시 정합성 검증 (Fail Fast)** — API 로딩 단계에서 불일치를 감지하면 즉시
-예외를 발생시켜 컨테이너가 뜨지 않도록 했습니다.
+1. **재현 가능한 인덱스 빌드 스크립트** — 서빙 파일을 단일 기준(SSOT)으로 삼아 생성하고,
+   생성 과정에서 행 수를 검증
+2. **기동 시 정합성 검증 (Fail Fast)** — 불일치 시 즉시 예외를 발생시켜 컨테이너가
+   뜨지 않도록 함
 
 ```python
 if self.faiss_index.ntotal != len(self.books):
@@ -518,18 +625,36 @@ if self.faiss_index.ntotal != len(self.books):
     )
 ```
 
-잘못된 추천을 조용히 서빙하는 것보다, 기동 시점에 명확히 실패하는 편이 안전하다고
-판단했습니다.
+3. **CI 검증 추가** — 동일 문제가 배포 이전에 차단되도록 CI에 포함
 
-**3. CI 검증 추가** — 동일한 문제가 배포 이전 단계에서 차단되도록 CI에 정합성 검증을
-포함시켰습니다.
+**배운 점** — 헬스체크를 단순 생존 확인(`{"status": "ok"}`)이 아니라 **핵심 자원의
+정합성까지 노출**하도록 설계한 덕분에, 사용자 신고 이전에 배포 직후 문제를 발견할 수
+있었습니다. 모니터링 엔드포인트에 어떤 지표를 담을지가 실제 장애 탐지 시점을 좌우합니다.
 
-### 배운 점
+### 2. Cloud Run 배포
 
-헬스체크를 단순 생존 확인(`{"status": "ok"}`)이 아니라 **핵심 자원의 정합성까지
-노출**하도록 설계한 덕분에, 사용자 신고 이전에 배포 직후 문제를 발견할 수 있었습니다.
-모니터링 엔드포인트에 어떤 지표를 담을지가 실제 장애 탐지 시점을 좌우한다는 것을
-확인한 사례입니다.
+**IAM 권한** — 첫 배포가 `403 storage.objects.get denied`로 실패했습니다.
+신규 GCP 프로젝트의 기본 컴퓨트 서비스 계정은 권한이 축소된 상태로 생성되어, Cloud Build가
+업로드된 소스를 읽지 못했습니다.
+
+빌드 파이프라인 전체에 필요한 권한을 한 번에 부여해 해결했습니다.
+
+| 역할 | 필요 시점 |
+|---|---|
+| `storage.objectViewer` | 업로드된 소스 zip 읽기 |
+| `logging.logWriter` | 빌드 로그 기록 |
+| `artifactregistry.writer` | 빌드 이미지 저장 |
+| `secretmanager.secretAccessor` | 런타임 API 키 접근 |
+
+IAM 변경은 즉시 전파되지 않아 1~2분 대기 후 재시도가 필요했습니다.
+
+**포트 설정** — Cloud Run은 `PORT` 환경변수를 주입하고 해당 포트에서 수신하지 않으면
+배포를 실패 처리합니다. Dockerfile의 `CMD`를 셸 형식으로 바꿔 변수를 확장하도록 수정했습니다.
+([Cloud Run 배포](#️-cloud-run-배포) 참조)
+
+**개발 루프** — 배포 실패 원인은 대부분 로컬에서 재현 가능한 것이었습니다. Cloud Run 배포는
+한 사이클에 5분, 로컬 `uvicorn` 기동은 10초입니다. **로컬 검증 → 배포** 순서를 지키는 것이
+가장 효과적인 시간 절약이었습니다.
 
 ---
 
@@ -545,6 +670,8 @@ if self.faiss_index.ntotal != len(self.books):
    메타데이터 필터링이 필요함을 실증
 5. **외부 의존성은 변한다** — 모델·인증·SDK 모든 계층에서 변경이 발생하므로
    설정 분리와 폴백이 필수
+6. **배포는 시작이지 끝이 아니다** — 권한·포트·비용 등 배포 이후에야 드러나는 문제가
+   존재하며, 이를 통제하는 장치를 함께 설계해야 함
 
 ---
 
@@ -561,12 +688,15 @@ if self.faiss_index.ntotal != len(self.books):
 
 ### 인프라
 
-- **API 클라우드 미배포**: 컨테이너화는 완료했으나 클라우드 배포는 하지 않았습니다.
-  현재 데모는 로컬 추론 폴백으로 동작합니다
-- **캐시 휘발성**: 설명 캐시가 인메모리라 컨테이너 재시작 시 소실됩니다.
+- **콜드 스타트**: Cloud Run이 0으로 스케일다운되므로 유휴 후 첫 요청이 20~40초 소요.
+  최소 인스턴스 1개 유지로 해결 가능하나 상시 과금이 발생해 현재는 폴백으로 대응
+- **이미지 용량**: PyTorch와 사전 다운로드 모델로 약 1.09GB. 멀티스테이지 빌드로
+  빌드 도구를 최종 이미지에서 제외하면 감축 가능
+- **캐시 휘발성**: 설명 캐시가 인메모리라 인스턴스 재시작 시 소실.
   프로덕션에서는 Redis 등 외부 캐시로 교체 필요
-- **LLM 비용·지연**: 설명 생성이 2~5초 소요됩니다. 스트리밍 응답으로 체감 지연을
-  줄이는 개선이 가능합니다
+- **배포 자동화 부재**: CI는 검증까지만 수행하고 배포는 수동. Cloud Run 배포까지
+  CD로 연결하는 것이 다음 단계
+- **LLM 지연**: 설명 생성이 2~5초 소요. 스트리밍 응답으로 체감 지연 개선 가능
 
 자세한 회고는 [프로젝트 상세 리포트](./BOOK_OVERVIEW_KOR.md)와 배포된 앱의
 **[결론과 한계]** 페이지에서 확인할 수 있습니다.
@@ -598,7 +728,7 @@ korean-book-recommender/
 ├── models/                        # FAISS 인덱스
 ├── notebooks/                     # 전체 분석 노트북 (Colab)
 ├── streamlit_app.py               # Streamlit 홈
-├── Dockerfile
+├── Dockerfile                     # PORT 환경변수 대응 (로컬·Cloud Run 공용)
 ├── docker-compose.yml
 ├── .dockerignore
 ├── requirements-api.txt           # API 서버 의존성
@@ -618,7 +748,8 @@ korean-book-recommender/
 ## ⚠️ 참고 사항
 
 - 브라우저 자동 번역 기능을 **끄고** 접속해 주세요 (한글 UI 왜곡 방지)
-- 데모는 로컬 추론 모드로 동작하며, 첫 검색 시 모델 로딩으로 30초~1분 소요될 수 있습니다
+- Cloud Run이 유휴 상태일 때 첫 요청은 콜드 스타트로 20~40초 소요됩니다.
+  이 경우 프론트엔드가 로컬 추론으로 폴백해 응답합니다
 - Streamlit Cloud 무료 티어 특성상 장시간 미사용 시 앱이 슬립 상태가 될 수 있습니다
 
 ---
@@ -633,5 +764,5 @@ korean-book-recommender/
 ## 👤 About
 
 - **작성자**: pssjun
-- **프로젝트 유형**: 데이터 사이언스 / ML 엔지니어링 포트폴리오
+- **프로젝트 유형**: ML 엔지니어링 포트폴리오
 - **관련 프로젝트**: [EV 충전소 수요 예측](https://github.com/pssjun/ev-charging-forecast) · [ESG 강화학습 재현연구](https://github.com/pssjun/esg-ppo-portfolio)
