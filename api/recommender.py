@@ -134,12 +134,15 @@ class HybridRecommender:
         query_vec, match_meta = build_query_vector(
             books, self.title_matcher, self.sbert_model
         )
-        results, meta = self._search_and_blend(query_vec, top_k, alpha)
 
-        # 입력한 책 자신은 결과에서 제외
+        # 입력 도서가 결과에 포함될 수 있으므로 제외할 만큼 더 가져온다
+        fetch_k = top_k + len(match_meta["matched_titles"])
+        results, meta = self._search_and_blend(query_vec, fetch_k, alpha)
+
         if match_meta["matched_titles"]:
             results = results[~results["title"].isin(match_meta["matched_titles"])]
-            results = results.head(top_k).reset_index(drop=True)
+
+        results = results.head(top_k).reset_index(drop=True)
 
         meta.update(match_meta)
         elapsed_ms = (time.perf_counter() - start) * 1000
