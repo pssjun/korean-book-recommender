@@ -6,13 +6,17 @@
 ![Cloud Run](https://img.shields.io/badge/Cloud%20Run-Deployed-4285F4?logo=googlecloud&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED?logo=docker&logoColor=white)
 ![FAISS](https://img.shields.io/badge/FAISS-Vector%20Search-4B8BBE)
+![PGVector](https://img.shields.io/badge/PGVector-PostgreSQL-336791?logo=postgresql&logoColor=white)
 ![Gemini](https://img.shields.io/badge/Gemini-RAG-8E75B2?logo=google&logoColor=white)
 
 > **추천 모델을 API로 서빙하고, 컨테이너화·CI·RAG·클라우드 배포까지 확장한 End-to-End ML 서비스**
 
-한국 도서 6,974권을 SentenceBERT로 임베딩하고 FAISS로 검색하는 추천 엔진을 FastAPI로 서빙합니다.
+한국 도서 6,974권을 SentenceBERT로 임베딩하고 벡터 검색으로 추천하는 엔진을 FastAPI로 서빙합니다.
 Docker로 컨테이너화해 **Google Cloud Run에 배포**했으며, GitHub Actions가 push마다 컨테이너를
 실제로 기동해 7가지 항목을 검증합니다. 추천 근거 설명은 Gemini를 활용한 RAG로 생성합니다.
+
+검색 백엔드는 **FAISS와 PGVector 두 가지로 구현**해 결과와 성능을 비교했고,
+그 과정에서 발견한 검색 품질 결함을 해결했습니다.
 
 🔗 **[Live Demo](https://korean-book-recommender.streamlit.app/)** ·
 **[API 문서 (Swagger)](https://book-recommender-api-829972480350.asia-northeast3.run.app/docs)** ·
@@ -33,7 +37,7 @@ Docker로 컨테이너화해 **Google Cloud Run에 배포**했으며, GitHub Act
 | **관측 가능성** | 자원 정합성까지 검사하는 헬스체크, 요청 로깅 |
 | **CI 통합 테스트** | 컨테이너 실기동 후 7개 항목 자동 검증 |
 | **LLM 프로덕션 이슈** | 환각 억제, 캐싱, 모델 폴백 체인, 지연·비용 트레이드오프 |
-| **검색 품질** | 벡터 검색의 범주 미보장 문제를 메타데이터 필터로 보완 |
+| **벡터 검색 설계** | FAISS·PGVector 비교, 메타데이터 필터, 쿼리-문서 비대칭 해결 |
 | **비용 관리** | 인스턴스 상한, 이미지 정리 정책, 예산 알림 |
 
 ---
@@ -53,6 +57,8 @@ Docker로 컨테이너화해 **Google Cloud Run에 배포**했으며, GitHub Act
 - [✅ CI 통합 테스트](#-ci-통합-테스트)
 - [🤖 RAG 기반 추천 이유 설명](#-rag-기반-추천-이유-설명)
 - [🏷 벡터 검색의 한계와 메타데이터 필터링](#-벡터-검색의-한계와-메타데이터-필터링)
+- [🔎 쿼리-문서 비대칭 문제](#-쿼리-문서-비대칭-문제)
+- [🗄 벡터 검색 백엔드 비교: FAISS vs PGVector](#-벡터-검색-백엔드-비교-faiss-vs-pgvector)
 - [🔗 외부 의존성 관리](#-외부-의존성-관리)
 - [🔍 트러블슈팅](#-트러블슈팅)
 - [💡 주요 발견](#-주요-발견)
@@ -69,7 +75,7 @@ Docker로 컨테이너화해 **Google Cloud Run에 배포**했으며, GitHub Act
 | **접근** | 콘텐츠 임베딩(실서비스)과 협업 필터링(방법론 검증)을 분리한 이중 트랙 하이브리드 |
 | **서빙** | FastAPI + Docker. 모델은 컨테이너 기동 시 1회 로딩 후 메모리 상주 |
 | **배포** | Google Cloud Run (asia-northeast3). Secret Manager로 키 주입, 0으로 스케일다운 |
-| **확장** | Gemini 기반 RAG로 추천 근거 설명 생성, 장르 메타데이터 필터링 |
+| **확장** | Gemini 기반 RAG로 추천 근거 설명, 장르 메타데이터 필터, PGVector 백엔드 추가 |
 | **검증** | CI에서 컨테이너를 실제 기동해 7가지 항목 자동 확인 |
 | **기간/인원** | 2025.01 – 2025.08 (8개월) / 개인 프로젝트 |
 
@@ -84,6 +90,12 @@ Docker로 컨테이너화해 **Google Cloud Run에 배포**했으며, GitHub Act
 - **ALS가 Baseline 대비 NDCG@10 +72.4%** 달성
 - Neural CF가 Popularity 수준으로 저조한 결과를 원인 분석과 함께 리포트 (Rendle et al. 2020 재현)
 
+### 검색 품질
+
+- **쿼리-문서 비대칭 문제 발견 및 해결** — 상위 6건 중 소설 2건 → **6건**, 1위 유사도 0.73 → **0.83**
+- **메타데이터 필터링** — 벡터 검색만으로 보장되지 않는 장르 조건을 후처리 필터로 해결
+- **백엔드 이중 구현** — FAISS와 PGVector 결과가 소수점 4자리까지 일치함을 검증
+
 ### 서빙 & 인프라
 
 - Streamlit 단일 앱 → **FastAPI API 서버로 분리**, 추천 로직을 재사용 가능한 구조로 전환
@@ -93,10 +105,9 @@ Docker로 컨테이너화해 **Google Cloud Run에 배포**했으며, GitHub Act
 - **관측 가능성** — 요청 로깅 미들웨어, `X-Process-Time-Ms` 헤더, 정합성까지 노출하는 `/health`
 - **이중화 폴백** — API 장애 시 프론트엔드 로컬 추론으로 자동 전환
 
-### LLM & 검색 품질
+### LLM
 
 - **RAG 기반 추천 이유 설명** — Gemini Flash-Lite 연동, 캐싱·폴백·환각 억제 설계 포함
-- **메타데이터 필터링** — 벡터 검색만으로 보장되지 않는 장르 조건을 후처리 필터로 해결
 - **모델 폴백 체인** — 공급자 측 모델 지원 중단에 대응하는 다중 후보 + 기동 시 실호출 검증
 
 ### 품질 관리
@@ -110,7 +121,8 @@ Docker로 컨테이너화해 **Google Cloud Run에 배포**했으며, GitHub Act
 
 - **언어**: Python 3.12
 - **데이터 수집**: `aiohttp` (비동기 병렬), `requests`
-- **콘텐츠 임베딩**: `sentence-transformers`, `FAISS`
+- **콘텐츠 임베딩**: `sentence-transformers`
+- **벡터 검색**: `FAISS`, `PGVector` (PostgreSQL 16)
 - **협업 필터링**: `implicit` (ALS), `scikit-learn` (SVD), `PyTorch` (NCF)
 - **LLM / RAG**: `Gemini API`, `google-genai`
 - **API 서빙**: `FastAPI`, `Uvicorn`, `Pydantic`
@@ -145,6 +157,14 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
+### PGVector 백엔드 (선택)
+
+```bash
+docker compose up -d postgres
+python scripts/load_pgvector.py     # 임베딩 적재
+python scripts/compare_backends.py  # FAISS와 비교
+```
+
 ### 인덱스 재생성
 
 도서 데이터를 변경한 경우 인덱스를 다시 만들어야 합니다.
@@ -168,8 +188,8 @@ flowchart LR
 
     subgraph GCP["Google Cloud Run"]
         EP["/recommend/path-a · path-b<br/>/explain · /health · /tags"]
-        SB["SentenceBERT<br/>쿼리 임베딩"]
-        FS["FAISS Index<br/>6,974 vectors"]
+        QE["쿼리 인코더<br/>제목 매칭 + 폴백"]
+        VS["벡터 검색<br/>FAISS / PGVector"]
         HB["하이브리드 스코어<br/>+ 장르 필터"]
     end
 
@@ -178,7 +198,7 @@ flowchart LR
 
     ST -->|HTTPS POST| EP
     ST -.->|실패 시| LF
-    EP --> SB --> FS --> HB
+    EP --> QE --> VS --> HB
     HB -->|JSON| ST
     EP --> LLM
     SM -.->|런타임 주입| EP
@@ -198,7 +218,7 @@ flowchart LR
 
 | Method | Endpoint | 설명 |
 |---|---|---|
-| `POST` | `/recommend/path-a` | 좋아하는 책 기반 추천 (취향 벡터 평균) |
+| `POST` | `/recommend/path-a` | 좋아하는 책 기반 추천 (제목 매칭 + 취향 벡터 평균) |
 | `POST` | `/recommend/path-b` | 태그 기반 추천 (콜드 스타트 대응, 장르 필터 적용) |
 | `POST` | `/explain` | RAG 기반 추천 근거 설명 생성 |
 | `GET` | `/tags` | 사용 가능한 취향 태그 목록 |
@@ -207,23 +227,26 @@ flowchart LR
 ### 요청 예시
 
 ```bash
-curl -X POST https://book-recommender-api-829972480350.asia-northeast3.run.app/recommend/path-b \
+curl -X POST https://book-recommender-api-829972480350.asia-northeast3.run.app/recommend/path-a \
   -H "Content-Type: application/json" \
-  -d '{"tags":["소설","힐링"],"top_k":5,"alpha":0.7}'
+  -d '{"books":["달러구트 꿈 백화점","불편한 편의점"],"top_k":5,"alpha":0.7}'
 ```
 
 ### 응답 예시
 
 ```json
 {
-  "path": "B",
+  "path": "A",
   "alpha": 0.7,
-  "query_summary": "소설, 힐링",
+  "query_summary": "달러구트 꿈 백화점, 불편한 편의점",
   "total_books_searched": 6974,
-  "elapsed_ms": 42.7,
-  "filter_applied": true,
+  "elapsed_ms": 38.4,
+  "matched_count": 2,
+  "total_count": 2,
+  "unmatched_queries": [],
+  "filter_applied": false,
   "filter_relaxed": false,
-  "allowed_categories": ["만화/라이트노벨", "소설/시/희곡"],
+  "allowed_categories": [],
   "results": [
     {
       "rank": 1,
@@ -231,14 +254,18 @@ curl -X POST https://book-recommender-api-829972480350.asia-northeast3.run.app/r
       "author": "...",
       "category_main": "소설/시/희곡",
       "category_mid": "한국소설",
-      "content_similarity": 0.7241,
+      "content_similarity": 0.8313,
       "popularity_score": 0.9200,
-      "hybrid_score": 0.8034,
+      "hybrid_score": 0.8579,
       "description": "..."
     }
   ]
 }
 ```
+
+`matched_count`는 입력한 도서 중 데이터셋에서 찾은 수입니다.
+찾지 못한 입력은 `unmatched_queries`에 표시되며 텍스트 인코딩으로 폴백됩니다.
+([쿼리-문서 비대칭 문제](#-쿼리-문서-비대칭-문제) 참조)
 
 Swagger UI(`/docs`)에서 브라우저로 직접 호출해볼 수 있습니다.
 Cloud Run이 유휴 상태일 때 첫 요청은 콜드 스타트로 20~40초 소요됩니다.
@@ -468,11 +495,11 @@ push마다 이미지를 빌드하고 **컨테이너를 실제로 기동**해 7�
 ## 🤖 RAG 기반 추천 이유 설명
 
 추천 결과에 "왜 이 책이 추천되었는지"를 자연어로 설명하는 기능을 추가했습니다.
-기존 FAISS 검색을 Retrieval로 그대로 활용하고, 뒷단에 Generation을 붙인 구조입니다.
+기존 벡터 검색을 Retrieval로 그대로 활용하고, 뒷단에 Generation을 붙인 구조입니다.
 
 ```mermaid
 flowchart LR
-    Q["사용자 입력"] --> R["Retrieval<br/>FAISS 유사도 검색"]
+    Q["사용자 입력"] --> R["Retrieval<br/>벡터 유사도 검색"]
     R --> A["Augmented<br/>도서 메타데이터로<br/>컨텍스트 구성"]
     A --> G["Generation<br/>Gemini Flash-Lite"]
     G --> O["전체 추천 방향<br/>+ 개별 도서 3권<br/>내용·분위기·추천이유"]
@@ -513,12 +540,12 @@ LLM의 자체 지식을 허용하면 유명 도서의 설명은 풍부해지지�
 
 Path B에서 "소설" 태그를 선택했는데 에세이가 결과에 포함되는 현상을 발견했습니다.
 
-원인은 **FAISS가 필터가 아니라 유사도 검색**이라는 점입니다.
+원인은 **벡터 검색이 필터가 아니라 유사도 검색**이라는 점입니다.
 
 ```
 ["소설", "힐링", "감동적인"]
   → 자연어 변환 → 임베딩 → 384차원 쿼리 벡터
-  → FAISS: 이 벡터에 가까운 도서 반환
+  → 벡터 검색: 이 벡터에 가까운 도서 반환
 ```
 
 여기서 "소설"은 쿼리 벡터의 방향에 영향을 주는 요소일 뿐, `장르 = 소설`이라는 조건이
@@ -530,7 +557,7 @@ Path B에서 "소설" 태그를 선택했는데 에세이가 결과에 포함되
 검색 결과에 카테고리 필터를 후처리로 적용했습니다.
 
 ```
-FAISS over-fetch (top_k × 10)
+over-fetch (top_k × 10)
   → 하이브리드 스코어 정렬
   → 허용 카테고리 필터
   → 결과 부족 시 완화 (graceful degradation)
@@ -551,6 +578,183 @@ FAISS over-fetch (top_k × 10)
 필터 결과가 `max(3, top_k/2)` 미만이면 유사도 상위 도서로 채우고, 응답의
 `filter_relaxed` 필드로 이를 알립니다. 결과가 없는 것보다 완화된 결과를 투명하게
 알리는 편이 낫다고 보았습니다.
+
+> PGVector 백엔드에서는 이 필터를 `WHERE` 절로 직접 처리해 over-fetch가 불필요합니다.
+> 대신 필터 쿼리 자체가 느려지는 트레이드오프가 있습니다.
+> ([백엔드 비교](#-벡터-검색-백엔드-비교-faiss-vs-pgvector) 참조)
+
+---
+
+## 🔎 쿼리-문서 비대칭 문제
+
+### 발견
+
+PGVector로 검색 백엔드를 이식하며 두 구현의 결과를 비교하던 중,
+순수 유사도 기준 검색 결과가 이상하다는 것을 발견했습니다.
+
+```
+쿼리: "달러구트 꿈 백화점"
+
+1. [여행]      전국의 맛집 2026          0.7285
+2. [역사]      박시백의 조선왕조실록      0.7012
+3. [인문학]    옛 그림으로 본 제주        0.6898
+4. [요리/살림] 주권의 다보와 다은일미     0.6868
+5. [소설]      소설가 구보 씨의 일일      0.6856
+```
+
+힐링 소설을 입력했는데 맛집 가이드와 조선왕조실록이 상위에 나왔습니다.
+더 문제는 **유사도가 0.68~0.73 사이에 몰려 있다는 점**이었습니다.
+진짜 유사한 문서가 있다면 상위 항목이 뚜렷하게 높아야 하는데,
+모든 도서가 비슷한 점수를 받고 있었습니다.
+
+### 원인
+
+문서 임베딩과 쿼리 임베딩의 **텍스트 형식이 달랐습니다.**
+
+| | 구성 | 길이 |
+|---|---|---|
+| 저장된 문서 임베딩 | 제목 + 카테고리 + 저자 + 소개문 | 약 300자 |
+| 사용자 쿼리 임베딩 | 제목만 | 약 12자 |
+
+짧은 쿼리는 벡터 공간에서 어느 긴 문서와도 뚜렷하게 가깝지 않은 지점에 위치합니다.
+그 결과 **유사도가 변별력을 잃고**, 하이브리드 스코어에서 인기도 항이
+실질적으로 순위를 결정하고 있었습니다.
+
+정보검색에서 알려진 **쿼리-문서 비대칭(asymmetric search)** 문제입니다.
+
+### 왜 그동안 드러나지 않았나
+
+하이브리드 스코어가 문제를 가리고 있었습니다.
+
+```
+최종 점수 = α × 콘텐츠 유사도 + (1 − α) × 인기 신호
+```
+
+유사도가 모두 비슷하면 첫 항이 순위에 거의 기여하지 못하고, 인기 신호만 남습니다.
+결과적으로 유명한 도서가 상위에 오면서 겉보기에는 그럴듯한 추천처럼 보였습니다.
+
+**성능 지표로는 드러나지 않고, 결과를 눈으로 봐도 판단하기 어려운 유형의 결함**이었습니다.
+
+### 해결
+
+입력한 도서가 데이터셋에 있으면 **저장된 임베딩을 그대로 사용**하도록 변경했습니다.
+쿼리와 문서의 형식이 같아지므로 비대칭 문제가 사라집니다.
+
+```
+사용자 입력
+    ↓
+제목 정규화 후 매칭 (부제·괄호·기호 제거)
+    ├─ 찾음   → 저장된 임베딩 사용      (형식 일치)
+    └─ 못 찾음 → 텍스트 인코딩          (기존 방식, 폴백)
+    ↓
+여러 권이면 벡터 평균 후 정규화
+    ↓
+유사 도서 검색 (입력 도서는 결과에서 제외)
+```
+
+데이터셋에 없는 도서도 입력될 수 있으므로 폴백을 유지했고,
+응답에 `matched_count`와 `unmatched_queries`를 포함해
+몇 권이 매칭되었는지 확인할 수 있게 했습니다.
+
+### 결과
+
+```
+쿼리: "달러구트 꿈 백화점", "미드나잇 라이브러리", "불편한 편의점"
+```
+
+| | Before | After |
+|---|---|---|
+| 상위 6건 중 소설 | 2건 | **6건** |
+| 1위 유사도 | 0.7285 (맛집 가이드) | **0.8313** (불편한 편의점 2) |
+| 상위 결과 성격 | 여행·역사·요리 혼재 | 힐링 소설 계열 |
+
+1위가 입력 도서의 시리즈 후속작(`불편한 편의점 2`)으로 나온 것이
+정상 동작의 근거였습니다.
+
+### 배운 점
+
+**임베딩 검색에서는 쿼리와 문서를 같은 형식으로 만드는 것이 전제**입니다.
+같은 모델을 쓴다고 해서 자동으로 비교 가능한 벡터가 되지 않습니다.
+
+또한 이 결함은 다른 백엔드로 이식해 결과를 비교하지 않았다면 발견하기 어려웠습니다.
+**같은 문제를 두 가지 방식으로 풀어보는 것**이 검증 수단이 될 수 있다는 것을 확인했습니다.
+
+---
+
+## 🗄 벡터 검색 백엔드 비교: FAISS vs PGVector
+
+동일한 임베딩을 두 백엔드에 적재하고 검색 결과와 성능을 비교했습니다.
+
+```mermaid
+flowchart LR
+    E["SentenceBERT 임베딩<br/>6,974 × 384"]
+    E --> F["FAISS<br/>IndexFlatIP"]
+    E --> P["PGVector<br/>HNSW"]
+    F --> R1["순번 반환<br/>→ DataFrame 조회<br/>→ 카테고리 후처리"]
+    P --> R2["메타데이터 포함 반환<br/>WHERE 절로 필터"]
+```
+
+### 결과 일치성 검증
+
+동일한 쿼리에 대해 두 백엔드의 유사도가 **소수점 4자리까지 일치**했습니다.
+
+```
+FAISS    : 0.7568, 0.7524, 0.7480, 0.7436, 0.7420
+PGVector : 0.7568, 0.7524, 0.7480, 0.7436, 0.7420
+```
+
+임베딩 적재와 거리 계산이 정확히 이식되었음을 확인했습니다.
+
+### 기능 비교
+
+| 항목 | FAISS | PGVector |
+|---|---|---|
+| 형태 | 라이브러리 (프로세스 내) | 데이터베이스 (별도 서버) |
+| 저장 대상 | 벡터만 | 벡터 + 메타데이터 |
+| 카테고리 필터 | 불가 → over-fetch 후처리 필요 | `WHERE` 절로 직접 처리 |
+| 필터 결과 부족 | 완화 로직 필요 | 발생하지 않음 |
+| 데이터 정합성 | 별도 파일 간 순번 의존 | 같은 행에 저장 |
+| 데이터 추가·삭제 | 인덱스 재생성 | `INSERT` / `DELETE` |
+| 인프라 | 불필요 | DB 서버 필요 |
+
+### 성능 비교 (6,974건 기준)
+
+| 쿼리 유형 | PGVector |
+|---|---|
+| 필터 없음 | 약 1.8 ms |
+| 카테고리 필터 적용 | 약 86 ms |
+
+**필터 쿼리가 40배 이상 느립니다.** HNSW는 전체에서 가장 가까운 벡터를 찾도록
+설계되어 있어, `WHERE` 조건이 붙으면 필터를 통과하는 후보가 모일 때까지
+추가 탐색이 필요하기 때문입니다(post-filtering).
+
+즉 **필터 구현은 간단해지지만 필터 쿼리 자체는 느려지는 트레이드오프**가 있습니다.
+데이터 규모가 커지면 사전 필터링을 지원하는 인덱스 구성이나 파티셔닝을
+검토해야 할 지점입니다.
+
+### 선택 기준
+
+| 상황 | 적합한 백엔드 |
+|---|---|
+| 데이터가 거의 변하지 않음 | FAISS |
+| 메타데이터 필터가 중요함 | PGVector |
+| 지연 시간이 최우선 | FAISS |
+| 데이터 추가·삭제가 잦음 | PGVector |
+| 여러 서비스가 같은 벡터를 공유 | PGVector |
+
+현재 서비스는 도서 데이터가 정적이고 지연이 중요해 **FAISS를 기본**으로 유지하되,
+PGVector 백엔드를 함께 구현해 비교 가능한 상태로 두었습니다.
+
+### 부수적으로 확인한 것
+
+제목 매칭 쿼리를 처음에 다음과 같이 작성했더니 응답이 돌아오지 않았습니다.
+
+```sql
+WHERE lower(regexp_replace(title, '[^가-힣a-zA-Z0-9]', '', 'g')) = ...
+```
+
+`WHERE` 절에서 컬럼에 함수를 적용하면 인덱스를 사용하지 못하고 전체 행을 스캔합니다.
+제목 정규화를 애플리케이션에서 미리 수행하고 `ILIKE`만 사용하도록 변경해 해결했습니다.
 
 ---
 
@@ -656,6 +860,14 @@ IAM 변경은 즉시 전파되지 않아 1~2분 대기 후 재시도가 필요�
 한 사이클에 5분, 로컬 `uvicorn` 기동은 10초입니다. **로컬 검증 → 배포** 순서를 지키는 것이
 가장 효과적인 시간 절약이었습니다.
 
+### 3. 검색 품질 결함
+
+백엔드 이식 과정에서 발견한 쿼리-문서 비대칭 문제는 별도 섹션에 정리했습니다.
+([쿼리-문서 비대칭 문제](#-쿼리-문서-비대칭-문제) 참조)
+
+성능 지표로는 드러나지 않고 결과를 눈으로 봐도 판단하기 어려운 유형이었으며,
+**두 백엔드의 결과를 나란히 비교**한 것이 발견 계기였습니다.
+
 ---
 
 ## 💡 주요 발견
@@ -668,16 +880,18 @@ IAM 변경은 즉시 전파되지 않아 1~2분 대기 후 재시도가 필요�
    콘텐츠 기반 하이브리드의 필요성을 정량적으로 뒷받침
 4. **벡터 검색은 필터가 아니다** — 유사도 검색만으로는 범주 조건을 보장할 수 없어
    메타데이터 필터링이 필요함을 실증
-5. **외부 의존성은 변한다** — 모델·인증·SDK 모든 계층에서 변경이 발생하므로
+5. **쿼리와 문서는 같은 형식이어야 한다** — 같은 모델을 써도 텍스트 구성이 다르면
+   유사도가 변별력을 잃음. 하이브리드 스코어가 이 결함을 가리고 있었음
+6. **외부 의존성은 변한다** — 모델·인증·SDK 모든 계층에서 변경이 발생하므로
    설정 분리와 폴백이 필수
-6. **배포는 시작이지 끝이 아니다** — 권한·포트·비용 등 배포 이후에야 드러나는 문제가
+7. **배포는 시작이지 끝이 아니다** — 권한·포트·비용 등 배포 이후에야 드러나는 문제가
    존재하며, 이를 통제하는 장치를 함께 설계해야 함
 
 ---
 
 ## ⚠️ 한계 및 향후 개선
 
-### 모델링
+### 모델링·검색
 
 - **개인화의 한계**: 유저 개별 이력 없이 콘텐츠 유사도 + 전체 평균 인기만 결합.
   실서비스에서는 유저 로그 축적 후 CF 재도입 필요
@@ -685,6 +899,10 @@ IAM 변경은 즉시 전파되지 않아 1~2분 대기 후 재시도가 필요�
   정성 평가로만 검증
 - **카테고리 세분화**: `cat_main`이 "소설/시/희곡"으로 묶여 있어 "시"만 선택해도
   소설이 함께 나옴. 더 세밀한 분류는 `cat_mid` 활용 필요
+- **제목 매칭 범위**: 데이터셋에 없는 도서는 텍스트 인코딩으로 폴백하므로 비대칭
+  문제가 남습니다. 쿼리 전용 임베딩 모델(asymmetric model) 도입을 고려할 수 있음
+- **필터 쿼리 성능**: PGVector에서 카테고리 필터 적용 시 쿼리가 약 40배 느려짐
+  (post-filtering). 데이터가 커지면 파티셔닝이나 사전 필터링 인덱스 검토 필요
 
 ### 인프라
 
@@ -712,6 +930,8 @@ korean-book-recommender/
 ├── api/                           # FastAPI 추천 서버
 │   ├── main.py                    # 엔드포인트, 미들웨어, lifespan
 │   ├── recommender.py             # 추천 엔진 (모델·인덱스 관리, 정합성 검증)
+│   ├── query_encoder.py           # 제목 매칭 기반 쿼리 임베딩 (비대칭 문제 해결)
+│   ├── pgvector_search.py         # PGVector 검색 백엔드
 │   ├── explainer.py               # RAG 설명 생성 (폴백 체인, 캐싱)
 │   ├── genre_filter.py            # 장르 태그 → 카테고리 필터
 │   └── schemas.py                 # Pydantic 요청/응답 스키마
@@ -719,7 +939,9 @@ korean-book-recommender/
 │   ├── local_recommender.py       # API 장애 시 직접 추론
 │   └── local_explainer.py         # API 장애 시 직접 설명 생성
 ├── scripts/
-│   └── build_index.py             # FAISS 인덱스 재생성 (정합성 검증 포함)
+│   ├── build_index.py             # FAISS 인덱스 재생성 (정합성 검증 포함)
+│   ├── load_pgvector.py           # PostgreSQL 임베딩 적재
+│   └── compare_backends.py        # FAISS vs PGVector 비교
 ├── pages/                         # Streamlit 페이지 (API 클라이언트)
 │   ├── 1_📖_책_추천받기.py
 │   ├── 2_📊_협업_필터링_실험.py
@@ -729,7 +951,7 @@ korean-book-recommender/
 ├── notebooks/                     # 전체 분석 노트북 (Colab)
 ├── streamlit_app.py               # Streamlit 홈
 ├── Dockerfile                     # PORT 환경변수 대응 (로컬·Cloud Run 공용)
-├── docker-compose.yml
+├── docker-compose.yml             # API + PostgreSQL
 ├── .dockerignore
 ├── requirements-api.txt           # API 서버 의존성
 └── requirements.txt               # Streamlit 의존성
