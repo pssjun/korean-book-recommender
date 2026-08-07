@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 load_dotenv()
 
+from fastapi.responses import RedirectResponse
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -27,6 +28,7 @@ from .schemas import (
 
 recommender = HybridRecommender()
 explainer = RecommendationExplainer()
+
 
 
 # 로깅 설정
@@ -97,6 +99,10 @@ def _to_book_items(results_df) -> list:
         )
     return items
 
+@app.get("/", include_in_schema=False)
+def root():
+    """루트 접근 시 API 문서로 리다이렉트"""
+    return RedirectResponse(url="/docs")
 
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 def health_check():
@@ -135,6 +141,9 @@ def recommend_path_a(req: PathARequest):
         filter_applied=meta["filter_applied"],
         filter_relaxed=meta["filter_relaxed"],
         allowed_categories=meta["allowed_categories"],
+        matched_count=meta.get("matched_count", 0),           # ← 추가
+        total_count=meta.get("total_count", 0),               # ← 추가
+        unmatched_queries=meta.get("unmatched_queries", []),  # ← 추가
         results=_to_book_items(results),
     )
 

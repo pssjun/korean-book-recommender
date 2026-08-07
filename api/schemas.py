@@ -61,6 +61,9 @@ class RecommendResponse(BaseModel):
     filter_relaxed: bool = Field(default=False, description="필터 결과 부족으로 완화되었는지")
     allowed_categories: List[str] = Field(default_factory=list)
     results: List[BookItem]
+    matched_count: int = Field(default=0, description="DB에서 찾은 입력 도서 수")
+    total_count: int = Field(default=0, description="입력한 도서 수")
+    unmatched_queries: List[str] = Field(default_factory=list, description="DB에 없는 입력")
 
 
 class HealthResponse(BaseModel):

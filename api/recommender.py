@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Tuple
 from typing import List, Tuple, Optional, Set
 from .genre_filter import resolve_allowed_categories, apply_category_filter
+from .query_encoder import TitleMatcher, build_query_vector
 
 import numpy as np
 import pandas as pd
@@ -29,6 +30,7 @@ class HybridRecommender:
         self.faiss_index = None
         self.sbert_model = None
         self._loaded = False
+        self.title_matcher = None
 
     def load(self):
         """앱 시작 시 1회 호출 - 모든 자원을 메모리에 로딩"""
@@ -62,6 +64,14 @@ class HybridRecommender:
             f"Recommender loaded in {elapsed:.2f}s "
             f"(books={len(self.books)}, index={self.faiss_index.ntotal})"
         )
+        # 제목 매칭용 임베딩 복원 (FAISS 인덱스에서 역추출)
+        try:
+            stored = self.faiss_index.reconstruct_n(0, self.faiss_index.ntotal)
+            self.title_matcher = TitleMatcher(self.books, np.asarray(stored, dtype=np.float32))
+            logger.info(f"TitleMatcher ready ({len(self.title_matcher._lookup)} titles)")
+        except Exception as e:
+            logger.warning(f"TitleMatcher init failed, falling back to text encoding: {e}")
+            self.title_matcher = None
 
     @property
     def is_loaded(self) -> bool:
@@ -118,10 +128,20 @@ class HybridRecommender:
     def recommend_path_a(
         self, books: List[str], top_k: int = 10, alpha: float = 0.7
     ) -> Tuple[pd.DataFrame, float, dict]:
-        """Path A: 좋아하는 책 기반 추천 (장르 필터 미적용)"""
+        """Path A: 좋아하는 책 기반 추천"""
         start = time.perf_counter()
-        query_vec = self._encode_query(books)
+
+        query_vec, match_meta = build_query_vector(
+            books, self.title_matcher, self.sbert_model
+        )
         results, meta = self._search_and_blend(query_vec, top_k, alpha)
+
+        # 입력한 책 자신은 결과에서 제외
+        if match_meta["matched_titles"]:
+            results = results[~results["title"].isin(match_meta["matched_titles"])]
+            results = results.head(top_k).reset_index(drop=True)
+
+        meta.update(match_meta)
         elapsed_ms = (time.perf_counter() - start) * 1000
         return results, elapsed_ms, meta
 

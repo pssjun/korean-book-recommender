@@ -88,19 +88,28 @@ jobs:
         run: |
           RESPONSE=$(curl -s -X POST http://localhost:8000/recommend/path-a \
             -H "Content-Type: application/json" \
-            -d '{"books":["달러구트 꿈 백화점","미드나잇 라이브러리"],"top_k":5,"alpha":0.7}')
+            -d '{"books":["달러구트 꿈 백화점","불편한 편의점"],"top_k":5,"alpha":0.7}')
 
           RESULT_COUNT=$(echo "$RESPONSE" | jq -r '.results | length')
+          MATCHED=$(echo "$RESPONSE" | jq -r '.matched_count')
           ELAPSED=$(echo "$RESPONSE" | jq -r '.elapsed_ms')
 
-          echo "Returned $RESULT_COUNT results in ${ELAPSED}ms"
-          echo "$RESPONSE" | jq -r '.results[] | "  - \(.rank). \(.title)"'
+          echo "results=$RESULT_COUNT, matched=$MATCHED, elapsed=${ELAPSED}ms"
+          echo "$RESPONSE" | jq -r '.results[] | "  - [\(.category_main)] \(.title)"'
 
           if [ "$RESULT_COUNT" != "5" ]; then
             echo "::error::Expected 5 results, got $RESULT_COUNT"
             docker logs api-test
             exit 1
           fi
+
+          # 제목 매칭이 동작하는지 확인 (쿼리-문서 비대칭 해결 검증)
+          if [ "$MATCHED" -lt 1 ]; then
+            echo "::error::Title matching failed (matched_count=$MATCHED)"
+            docker logs api-test
+            exit 1
+          fi
+          echo "Title matching verified: $MATCHED book(s) resolved from dataset"
 
       - name: Test recommendation endpoint (Path B)
         run: |
